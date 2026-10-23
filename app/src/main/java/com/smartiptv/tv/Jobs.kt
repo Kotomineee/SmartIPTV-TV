@@ -8,11 +8,12 @@ import java.util.concurrent.Future
 class Jobs {
     private val main = Handler(Looper.getMainLooper())
     private val io = Executors.newFixedThreadPool(2)
+    private val network = Executors.newFixedThreadPool(2)
     private val catalog = Executors.newSingleThreadExecutor()
     private val writer = Executors.newSingleThreadExecutor()
     @Volatile private var closed = false
-    fun <T> run(refresh: Boolean = false, work: () -> T, done: (T) -> Unit, failed: (String) -> Unit = {}): Future<*> {
-        val executor = if (refresh) catalog else io
+    fun <T> run(refresh: Boolean = false, network: Boolean = false, work: () -> T, done: (T) -> Unit, failed: (String) -> Unit = {}): Future<*> {
+        val executor = if (refresh) catalog else if (network) this.network else io
         return executor.submit {
             try {
                 val result = work()
@@ -32,9 +33,10 @@ class Jobs {
         main.removeCallbacksAndMessages(null)
         catalog.shutdownNow()
         io.shutdown()
+        network.shutdownNow()
         writer.shutdown()
         Executors.newSingleThreadExecutor().let { cleanup ->
-            cleanup.execute { io.awaitTermination(10, java.util.concurrent.TimeUnit.SECONDS); writer.awaitTermination(10, java.util.concurrent.TimeUnit.SECONDS); catalog.awaitTermination(10, java.util.concurrent.TimeUnit.SECONDS); after(); cleanup.shutdown() }
+            cleanup.execute { io.awaitTermination(10, java.util.concurrent.TimeUnit.SECONDS); network.awaitTermination(10, java.util.concurrent.TimeUnit.SECONDS); writer.awaitTermination(10, java.util.concurrent.TimeUnit.SECONDS); catalog.awaitTermination(10, java.util.concurrent.TimeUnit.SECONDS); after(); cleanup.shutdown() }
         }
     }
 }

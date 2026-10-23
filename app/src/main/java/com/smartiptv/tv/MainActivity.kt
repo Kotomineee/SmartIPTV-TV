@@ -43,7 +43,7 @@ class MainActivity : Activity() {
         setContentView(root)
         showLogin()
         loginView?.busy(true)
-        jobs.run(work = { database.writableDatabase; vault.restore() }, done = { credentials ->
+        jobs.run(work = { database.prepare(); vault.restore() }, done = { credentials ->
             if (credentials != null) authenticate(credentials, true) else loginView?.busy(false)
         }, failed = { loginView?.error(it) })
     }
@@ -61,7 +61,7 @@ class MainActivity : Activity() {
         api?.cancel()
         val client = XtreamApi(credentials)
         api = client
-        jobs.run(work = {
+        jobs.run(network = true, work = {
             val account = client.authenticate()
             vault.remember(credentials, remember)
             account
@@ -69,32 +69,34 @@ class MainActivity : Activity() {
     }
     private fun showCatalog(client: XtreamApi, account: Account) {
         root.removeAllViews(); loginView?.password?.text?.clear(); loginView = null
-        val screen = CatalogView(this, database, jobs, client.credentials.account, images, ::openContent, ::options, ::refreshCatalog, ::logout, ::cancelPendingContent)
+        val screen = CatalogView(this, database, jobs, client.credentials.account, images, ::openContent, ::options, { refreshCatalog(true) }, ::logout, ::cancelPendingContent)
         catalogView = screen
         root.addView(screen, FrameLayout.LayoutParams(-1, -1)); screen.showAccount(account)
         screen.nav["home"]?.requestFocus()
         refreshCatalog()
         handler.removeCallbacks(accountPoll); if (foreground) handler.postDelayed(accountPoll, 60000)
     }
-    private fun refreshCatalog() {
+    private fun refreshCatalog(force: Boolean = false) {
         val client = api ?: return
         val screen = catalogView ?: return
         if (catalogJob != null) return
         val token = generation
-        screen.refreshing(true); screen.message("Atualizando seu catálogo…")
+        val priority = screen.tab
+        screen.refreshing(true); screen.message("Atualizando catálogo em segundo plano…")
         catalogJob = jobs.run(refresh = true, work = {
-            for ((kind, label) in listOf("movie" to "Filmes", "series" to "Séries", "live" to "Canais")) {
-                val categories = client.categories(kind)
-                database.replaceSection(client.credentials.account, kind, categories) { sink -> client.catalog(kind, sink) }
+            CatalogSync(client, database, cacheDir).refresh(force, priority) { kind ->
                 jobs.ui {
                     if (token == generation) {
-                        screen.message("$label atualizados…")
-                        if (screen.tab == "home" || screen.tab == kind) screen.reload()
+                        if (playerView == null && details == null && (screen.tab == "home" || screen.tab == kind)) screen.catalogUpdated()
                     }
                 }
             }
-        }, done = {
-            if (token == generation) { catalogJob = null; screen.refreshing(false); screen.message(""); refreshAccount() }
+        }, done = { result ->
+            if (token == generation) {
+                catalogJob = null; screen.refreshing(false)
+                screen.message(if (result.failed.isEmpty()) "" else "Algumas seções não puderam ser atualizadas. O catálogo salvo continua disponível.", result.failed.isNotEmpty())
+                refreshAccount()
+            }
         }, failed = {
             if (token == generation) { catalogJob = null; screen.refreshing(false); screen.message(it, true); screen.reload() }
         })
@@ -103,7 +105,7 @@ class MainActivity : Activity() {
         val client = api ?: return
         if (catalogView == null || accountJob != null) return
         val token = generation
-        accountJob = jobs.run(work = { client.authenticate() }, done = {
+        accountJob = jobs.run(network = true, work = { client.authenticate() }, done = {
             if (token == generation) { accountJob = null; catalogView?.showAccount(it) }
         }, failed = { if (token == generation) accountJob = null })
     }
@@ -116,7 +118,7 @@ class MainActivity : Activity() {
             val token = generation
             val request = contentRequest
             val series = Content("series", item.seriesId, item.seriesName, item.categories, item.artwork, year = item.year)
-            jobs.run(work = { client.seriesInfo(series) }, done = { if (token == generation && request == contentRequest && playerView == null) { pendingEpisode = false; catalogView?.message(""); play(item, false, it.episodes) } }, failed = { if (token == generation && request == contentRequest && playerView == null) { pendingEpisode = false; catalogView?.message(""); play(item, false, emptyList()); toast("A lista dos próximos episódios está indisponível.") } })
+            jobs.run(network = true, work = { client.seriesInfo(series) }, done = { if (token == generation && request == contentRequest && playerView == null) { pendingEpisode = false; catalogView?.message(""); play(item, false, it.episodes) } }, failed = { if (token == generation && request == contentRequest && playerView == null) { pendingEpisode = false; catalogView?.message(""); play(item, false, emptyList()); toast("A lista dos próximos episódios está indisponível.") } })
             return
         }
         closeDetails()
@@ -141,7 +143,7 @@ class MainActivity : Activity() {
             focusedBeforeDetails?.takeIf { it.isAttachedToWindow }?.requestFocus()
             focusedBeforeDetails = null
             catalogView?.restorePosters()
-            catalogView?.reload()
+            catalogView?.refreshLibrary()
         }
     }
     private fun options(item: Content) {
@@ -205,7 +207,7 @@ class MainActivity : Activity() {
     @Deprecated("Android memory callback")
     override fun onTrimMemory(level: Int) {
         super.onTrimMemory(level)
-        if (level >= TRIM_MEMORY_RUNNING_LOW) { images.switchScreen(); if (foreground) details?.restoreArtwork() ?: catalogView?.restorePosters() }
+        if (level >= TRIM_MEMORY_RUNNING_LOW) images.switchScreen()
     }
     override fun onDestroy() {
         playerView?.shutdown(); playerView = null; details?.dismiss(); details = null

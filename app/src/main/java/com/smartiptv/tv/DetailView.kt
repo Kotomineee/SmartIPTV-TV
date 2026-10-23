@@ -38,6 +38,7 @@ class DetailView(
     private var checkpoint: Progress? = null
     private var season = 0
     private var future: Future<*>? = null
+    private var blurJob: Future<*>? = null
     private var dismissed = false
     private var blurred: Bitmap? = null
     private val backdrop = ImageView(context).apply { scaleType = ImageView.ScaleType.FIT_XY }
@@ -85,14 +86,13 @@ class DetailView(
                 else if (episodes.isNotEmpty()) selectSeason(progress.item.season, progress.item.uid)
             }
         })
-        images.load(item.artwork, poster)
         post { if (!dismissed) images.load(item.artwork, poster) }
         val width = 320
         if (backgroundView.width > 0 && backgroundView.height > 0) {
             val height = (width.toFloat() * backgroundView.height / backgroundView.width).toInt().coerceAtLeast(1)
             val snapshot = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
             Canvas(snapshot).apply { scale(width.toFloat() / backgroundView.width, height.toFloat() / backgroundView.height); backgroundView.draw(this) }
-            jobs.run(work = { blur(snapshot) }, done = { bitmap -> if (!dismissed) { blurred = bitmap; backdrop.setImageBitmap(bitmap) } else bitmap.recycle() })
+            blurJob = jobs.run(work = { blur(snapshot) }, done = { bitmap -> if (!dismissed) { blurred = bitmap; backdrop.setImageBitmap(bitmap) } })
         }
         load()
         post { watch.requestFocus() }
@@ -100,14 +100,15 @@ class DetailView(
 
     private fun selected(): Content? = if (item.kind == "series") selectedEpisode else item
     private fun toggleFavorite() {
-        jobs.run(work = { db.toggleFavorite(account, item) }, done = { active -> if (!dismissed) favorite.text = if (active) "Remover dos favoritos" else "Adicionar aos favoritos" }, failed = { if (!dismissed) { feedback.text = "Não foi possível salvar o favorito neste aparelho."; feedback.visibility = VISIBLE } })
+        favorite.isEnabled = false
+        jobs.run(work = { db.toggleFavorite(account, item) }, done = { active -> if (!dismissed) { favorite.isEnabled = true; favorite.text = if (active) "Remover dos favoritos" else "Adicionar aos favoritos" } }, failed = { if (!dismissed) { favorite.isEnabled = true; feedback.text = "Não foi possível salvar o favorito neste aparelho."; feedback.visibility = VISIBLE } })
     }
     private fun load() {
         future?.cancel(true); retry.visibility = GONE
         if (item.kind == "live") { plot.text = "Transmissão ao vivo do seu provedor."; feedback.visibility = GONE; return }
         feedback.visibility = if (item.kind == "series") VISIBLE else GONE
         feedback.text = "Carregando temporadas e episódios…"
-        if (item.kind == "series") future = jobs.run(work = { api.seriesInfo(item) }, done = { result ->
+        if (item.kind == "series") future = jobs.run(network = true, work = { api.seriesInfo(item) }, done = { result ->
             if (dismissed) return@run
             episodes = result.episodes
             plot.text = result.plot.ifBlank { "Sinopse não informada pelo provedor." }
@@ -124,7 +125,7 @@ class DetailView(
             if (values.isNotEmpty()) selectSeason(checkpoint?.item?.season?.takeIf { it in values } ?: values.first(), checkpoint?.item?.uid)
             if (findFocus() == null || findFocus() === this) watch.requestFocus()
         }, failed = ::failed)
-        else future = jobs.run(work = { api.movieInfo(item) }, done = { if (!dismissed) plot.text = it.ifBlank { "Este título não possui sinopse informada pelo provedor." } }, failed = {
+        else future = jobs.run(network = true, work = { api.movieInfo(item) }, done = { if (!dismissed) plot.text = it.ifBlank { "Este título não possui sinopse informada pelo provedor." } }, failed = {
             if (!dismissed) plot.text = item.plot.ifBlank { "Informações adicionais indisponíveis. Você pode tentar reproduzir o conteúdo." }
         })
     }
@@ -143,8 +144,9 @@ class DetailView(
         if (selectedIndex >= 0) episodeList.scrollToPosition(selectedIndex)
     }
     fun dismiss() {
-        dismissed = true; future?.cancel(true); api.cancelDetails()
-        images.clear(poster); backdrop.setImageDrawable(null); blurred?.recycle(); blurred = null
+        dismissed = true; future?.cancel(true); blurJob?.cancel(false); api.cancelDetails()
+        // HWUI may still own the last display list. Release references; do not recycle a displayed bitmap.
+        images.clear(poster); backdrop.setImageDrawable(null); blurred = null
     }
     fun restoreArtwork() { if (!dismissed) images.load(item.artwork, poster) }
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {

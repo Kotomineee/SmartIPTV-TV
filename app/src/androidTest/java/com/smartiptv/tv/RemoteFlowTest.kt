@@ -32,6 +32,7 @@ class RemoteFlowTest {
         val context = instrumentation.targetContext
         context.deleteDatabase("library.db")
         context.getSharedPreferences("session", 0).edit().clear().commit()
+        context.getSharedPreferences("playback", 0).edit().clear().commit()
         provider = TestProvider(instrumentation.context)
         device = UiDevice.getInstance(instrumentation)
         androidx.test.uiautomator.Configurator.getInstance().setWaitForIdleTimeout(200).setWaitForSelectorTimeout(3000)
@@ -285,5 +286,54 @@ class RemoteFlowTest {
             device.pressBack(); waitFor("Series detail did not close") { it.details == null }
         }
         device.executeShellCommand("wm size reset")
+    }
+
+    @Test fun largeCatalogRefreshAndRapidRemoteInteractionsRemainResponsive() {
+        provider.largeCatalog = true
+        val started = SystemClock.uptimeMillis()
+        ui { activity ->
+            activity.loginView!!.apply {
+                server.setText(provider.url); username.setText("demo"); password.setText("demopass")
+                remember.isChecked = true; submit.requestFocus()
+            }
+        }
+        device.pressDPadCenter()
+        waitFor("Large catalog login did not open") { it.catalogView != null }
+        navigate("settings")
+        var worstPulse = 0L
+        repeat(16) {
+            ui { it.catalogView!!.nextButton.requestFocus() }
+            device.pressDPadCenter()
+            val latch = java.util.concurrent.CountDownLatch(1)
+            val pulse = SystemClock.uptimeMillis()
+            android.os.Handler(android.os.Looper.getMainLooper()).post { latch.countDown() }
+            assertTrue("UI blocked while toggling autoplay during catalog import", latch.await(1500, java.util.concurrent.TimeUnit.MILLISECONDS))
+            worstPulse = maxOf(worstPulse, SystemClock.uptimeMillis() - pulse)
+            ui { assertEquals("Unexpected toggle state", (it.catalogView!!.nextButton.text.toString().endsWith("Ligado")), it.database.autoNext) }
+        }
+        waitFor("Large catalog did not finish all sections", 60000) {
+            it.catalogView!!.refreshButton.isEnabled && it.database.page(provider.account, "movie", limit = 1).total == 20000 && it.database.page(provider.account, "series", limit = 1).total == 6000 && it.database.page(provider.account, "live", limit = 1).total == 1000
+        }
+        val cold = SystemClock.uptimeMillis() - started
+        repeat(8) { for (tab in listOf("movie", "series", "live", "settings")) {
+            navigate(tab)
+            ui { assertTrue(it.images.memoryBytes <= 6 * 1024 * 1024); assertTrue(it.images.pendingCount <= 48) }
+        } }
+        navigate("movie")
+        repeat(12) {
+            ui { it.catalogView!!.focusContent() }; device.pressDPadCenter()
+            waitFor("Rapid detail did not open") { it.details != null }
+            device.pressBack()
+            waitFor("Rapid detail did not close") { it.details == null }
+        }
+        ui { it.onTrimMemory(android.content.ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW); assertEquals(0, it.images.memoryBytes) }
+        capture("12-large-catalog-after-stress")
+        val requests = provider.catalogRequests.get()
+        scenario.close()
+        val warmStart = SystemClock.uptimeMillis()
+        scenario = ActivityScenario.launch(MainActivity::class.java)
+        waitFor("Cached catalog did not restore") { it.catalogView?.refreshButton?.isEnabled == true && it.database.page(provider.account, "movie", limit = 1).total == 20000 }
+        assertEquals("Fresh catalog was downloaded again on restart", requests, provider.catalogRequests.get())
+        android.util.Log.i("SmartIPTVTest", "PERFORMANCE: 27000 items, cold=${cold}ms, warm=${SystemClock.uptimeMillis() - warmStart}ms, worst UI heartbeat=${worstPulse}ms, downloads=$requests")
     }
 }

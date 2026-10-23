@@ -29,6 +29,7 @@ class CoreTest {
         context = ApplicationProvider.getApplicationContext()
         context.deleteDatabase("library.db")
         context.getSharedPreferences("session", Context.MODE_PRIVATE).edit().clear().commit()
+        context.getSharedPreferences("playback", Context.MODE_PRIVATE).edit().clear().commit()
         db = LibraryDb(context)
         server = MockWebServer().apply { start() }
     }
@@ -220,5 +221,127 @@ class CoreTest {
         assertEquals(field.text.length, field.selectionStart)
         field.onEditorAction(android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH)
         assertFalse(field.showSoftInputOnFocus)
+    }
+
+    @Test fun playbackToggleAndReadsStayResponsiveWhileImportIsPaused() {
+        store(listOf(movie))
+        val staged = java.util.concurrent.CountDownLatch(1)
+        val release = java.util.concurrent.CountDownLatch(1)
+        val workers = java.util.concurrent.Executors.newFixedThreadPool(2)
+        val import = workers.submit {
+            db.replaceSection(account, "movie", emptyList()) { sink ->
+                repeat(250) { sink(movie.copy(id = "new-$it")) }
+                staged.countDown(); release.await(5, java.util.concurrent.TimeUnit.SECONDS)
+                throw ProviderFailure("Interrupted catalog")
+            }
+        }
+        try {
+            assertTrue(staged.await(10, java.util.concurrent.TimeUnit.SECONDS))
+            val interaction = workers.submit<Boolean> {
+                repeat(50) { db.autoNext = !db.autoNext }
+                assertEquals(movie.uid, db.page(account, "movie").items.single().uid)
+                db.toggleFavorite(account, movie)
+            }
+            assertTrue("Catalog import blocked local interactions", interaction.get(2, java.util.concurrent.TimeUnit.SECONDS))
+        } finally {
+            release.countDown()
+            assertThrows(java.util.concurrent.ExecutionException::class.java) { import.get(10, java.util.concurrent.TimeUnit.SECONDS) }
+            workers.shutdownNow()
+        }
+        assertEquals(movie.uid, db.page(account, "movie").items.single().uid)
+    }
+
+    @Test fun failedStreamAfterCommittedStagingBatchPreservesTheCatalog() {
+        store(listOf(movie))
+        assertThrows(ProviderFailure::class.java) {
+            db.replaceSection(account, "movie", emptyList()) { sink ->
+                repeat(501) { sink(movie.copy(id = "$it")) }
+                throw ProviderFailure("Truncated response")
+            }
+        }
+        assertEquals(movie.uid, db.page(account, "movie").items.single().uid)
+        assertEquals(2, db.categories(account, "movie").size)
+    }
+
+    @Test fun freshCatalogSkipsDownloadsAndFailureDoesNotDiscardOtherSections() {
+        val client = api()
+        val key = client.credentials.account
+        for ((kind, items) in listOf("movie" to listOf(movie), "series" to listOf(series), "live" to emptyList())) db.replaceSection(key, kind, emptyList()) { sink -> items.forEach(sink) }
+        val sync = CatalogSync(client, db, context.cacheDir)
+        assertTrue(sync.refresh(false).updated.isEmpty())
+        assertEquals(0, server.requestCount)
+        server.dispatcher = object : okhttp3.mockwebserver.Dispatcher() {
+            override fun dispatch(request: okhttp3.mockwebserver.RecordedRequest): MockResponse {
+                val action = request.requestUrl!!.queryParameter("action")!!
+                return when {
+                    action.endsWith("categories") -> MockResponse().setBody("[]")
+                    action == "get_vod_streams" -> MockResponse().setResponseCode(503)
+                    action == "get_series" -> MockResponse().setBody("""[{"series_id":2,"name":"Outra série"}]""")
+                    else -> MockResponse().setBody("[]")
+                }
+            }
+        }
+        val result = sync.refresh(true)
+        assertEquals(listOf("movie"), result.failed)
+        assertTrue(result.updated.containsAll(listOf("series", "live")))
+        assertEquals(movie.uid, db.page(key, "movie").items.single().uid)
+        assertEquals("Outra série", db.page(client.credentials.account, "series").items.single().name)
+        assertTrue(java.io.File(context.cacheDir, "catalog-sync").listFiles().isNullOrEmpty())
+    }
+
+    @Test fun selectiveStreamIgnoresUnusedNestedPayloadAndDiskImportUsesSameSchema() {
+        val payload = """[{"stream_id":9,"name":"Filme","category_ids":["1","2"],"irrelevant":{"nested":[${"0,".repeat(10000)}0]},"container_extension":"mkv"}]"""
+        response(payload)
+        val client = api()
+        val file = client.downloadCatalog("movie", context.cacheDir)
+        try {
+            val items = mutableListOf<Content>()
+            client.importCatalog("movie", file) { items += it }
+            assertEquals(listOf("1", "2"), items.single().categories)
+            assertEquals("mkv", items.single().extension)
+        } finally { file.delete() }
+    }
+
+    @Test fun cardMetadataUsesSeriesIndexAndKeepsAccountIsolation() {
+        val episode = Content("episode", "501", "Ep", seriesId = series.id, seriesName = series.name)
+        db.record(account, episode, 5000, 10000)
+        db.toggleFavorite(account, series)
+        val page = db.cards(account, Page(listOf(series, movie), 2))
+        assertTrue(page.cards[0].favorite)
+        assertEquals(episode.uid, page.cards[0].progress!!.item.uid)
+        assertNull(page.cards[1].progress)
+        assertNull(db.cards("other", Page(listOf(series), 1)).cards.single().progress)
+        assertTrue(db.isFresh(account, "movie").not())
+        store(listOf(movie)); assertTrue(db.isFresh(account, "movie"))
+        assertFalse(db.isFresh(account, "movie", System.currentTimeMillis() + 7 * 60 * 60 * 1000))
+    }
+
+    @Test fun versionOneDatabaseMigratesWithoutLosingFavoritesProgressOrAutoplay() {
+        db.close(); context.deleteDatabase("library.db")
+        val file = context.getDatabasePath("library.db"); file.parentFile!!.mkdirs()
+        val old = android.database.sqlite.SQLiteDatabase.openOrCreateDatabase(file, null)
+        old.use {
+            it.execSQL("CREATE TABLE contents(account TEXT,uid TEXT,kind TEXT,name TEXT,norm TEXT,added INTEGER,item TEXT,PRIMARY KEY(account,uid))")
+            it.execSQL("CREATE INDEX content_order ON contents(account,kind,added DESC)")
+            it.execSQL("CREATE INDEX content_name ON contents(account,kind,norm)")
+            it.execSQL("CREATE TABLE item_category(account TEXT,uid TEXT,category TEXT,PRIMARY KEY(account,uid,category))")
+            it.execSQL("CREATE TABLE categories(account TEXT,kind TEXT,id TEXT,name TEXT,PRIMARY KEY(account,kind,id))")
+            it.execSQL("CREATE TABLE library(account TEXT,uid TEXT,favorite INTEGER DEFAULT 0,position INTEGER DEFAULT 0,duration INTEGER DEFAULT 0,finished INTEGER DEFAULT 0,updated INTEGER DEFAULT 0,favorite_updated INTEGER DEFAULT 0,norm TEXT,item TEXT,PRIMARY KEY(account,uid))")
+            it.execSQL("CREATE TABLE loaded(account TEXT,kind TEXT,updated INTEGER,PRIMARY KEY(account,kind))")
+            it.execSQL("CREATE TABLE settings(name TEXT PRIMARY KEY,value TEXT)")
+            it.execSQL("INSERT INTO settings VALUES ('auto_next','true')")
+            it.execSQL("INSERT INTO contents VALUES (?,?,?,?,?,?,?)", arrayOf(account, movie.uid, "movie", movie.name, normalized(movie.name), 10, movie.json().toString()))
+            val episode = Content("episode", "old-101", "Episódio antigo", seriesId = series.id, seriesName = series.name)
+            it.execSQL("INSERT INTO library(account,uid,favorite,position,duration,updated,norm,item) VALUES (?,?,?,?,?,?,?,?)", arrayOf(account, episode.uid, 1, 5000, 10000, 1, normalized(episode.name), episode.json().toString()))
+            it.version = 1
+        }
+        db = LibraryDb(context); db.prepare()
+        assertEquals(2, db.readableDatabase.version)
+        assertTrue(db.autoNext)
+        assertEquals(movie.uid, db.page(account, "movie").items.single().uid)
+        assertEquals("episode:old-101", db.page(account, "favorites").items.single().uid)
+        assertEquals(5000L, db.checkpoint(account, series)!!.position)
+        db.autoNext = false; db.close(); db = LibraryDb(context); db.prepare()
+        assertFalse(db.autoNext)
     }
 }

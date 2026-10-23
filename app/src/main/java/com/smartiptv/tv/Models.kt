@@ -7,8 +7,13 @@ import java.security.MessageDigest
 import java.text.Normalizer
 import java.util.Locale
 
-fun normalized(value: String): String = Normalizer.normalize(value.lowercase(Locale.ROOT), Normalizer.Form.NFKD).replace("\\p{M}+".toRegex(), "")
-fun digest(value: String): String = MessageDigest.getInstance("SHA-256").digest(value.toByteArray()).joinToString("") { "%02x".format(it) }
+private val combiningMarks = Regex("\\p{M}+")
+fun normalized(value: String): String = Normalizer.normalize(value.lowercase(Locale.ROOT), Normalizer.Form.NFKD).replace(combiningMarks, "")
+fun digest(value: String): String {
+    val bytes = MessageDigest.getInstance("SHA-256").digest(value.toByteArray())
+    val hex = "0123456789abcdef"
+    return buildString(bytes.size * 2) { bytes.forEach { byte -> val n = byte.toInt() and 255; append(hex[n ushr 4]); append(hex[n and 15]) } }
+}
 fun stamp(ms: Long): String {
     val seconds = ms.coerceAtLeast(0) / 1000
     return if (seconds >= 3600) "%d:%02d:%02d".format(seconds / 3600, seconds / 60 % 60, seconds % 60) else "%02d:%02d".format(seconds / 60, seconds % 60)
@@ -17,7 +22,7 @@ fun stamp(ms: Long): String {
 class ProviderFailure(message: String) : Exception(message)
 
 class Credentials(val server: String, val username: String, val password: String) {
-    val account: String get() = digest(server.trimEnd('/').lowercase(Locale.ROOT) + "\u0000" + username)
+    val account: String by lazy { digest(server.trimEnd('/').lowercase(Locale.ROOT) + "\u0000" + username) }
     override fun toString() = "Credentials(<protected>)"
     companion object {
         fun validated(server: String, username: String, password: String): Credentials {
@@ -41,10 +46,20 @@ data class Content(
 ) {
     val uid: String get() = "$kind:$id"
     val displayName: String get() = if (kind == "episode" && seriesName.isNotEmpty()) "$seriesName · T%02d E%02d".format(season, episode) else name
-    fun json(): JSONObject = JSONObject().put("kind", kind).put("id", id).put("name", name)
-        .put("categories", JSONArray(categories)).put("artwork", artwork).put("added", added).put("year", year)
-        .put("rating", rating).put("plot", plot).put("extension", extension).put("seriesId", seriesId)
-        .put("seriesName", seriesName).put("season", season).put("episode", episode).put("duration", duration)
+    fun json(): JSONObject = JSONObject().put("kind", kind).put("id", id).put("name", name).apply {
+        if (categories.isNotEmpty()) put("categories", JSONArray(categories))
+        if (artwork.isNotEmpty()) put("artwork", artwork)
+        if (added != 0L) put("added", added)
+        if (year.isNotEmpty()) put("year", year)
+        if (rating.isNotEmpty()) put("rating", rating)
+        if (plot.isNotEmpty()) put("plot", plot)
+        if (extension != "mp4") put("extension", extension)
+        if (seriesId.isNotEmpty()) put("seriesId", seriesId)
+        if (seriesName.isNotEmpty()) put("seriesName", seriesName)
+        if (season != 0) put("season", season)
+        if (episode != 0) put("episode", episode)
+        if (duration != 0L) put("duration", duration)
+    }
     companion object {
         fun fromJson(j: JSONObject): Content = Content(j.getString("kind"), j.getString("id"), j.getString("name"),
             j.optJSONArray("categories")?.let { a -> (0 until a.length()).map { a.optString(it) } } ?: emptyList(),

@@ -11,11 +11,13 @@ import okhttp3.Response
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.IOException
+import java.io.File
+import java.io.Reader
 import java.util.concurrent.TimeUnit
 
 class XtreamApi(val credentials: Credentials, private val http: OkHttpClient = client()) {
     private val requestTag = Any()
-    private data class Scope(val owner: Any, val details: Boolean)
+    private data class Scope(val owner: Any, val details: Boolean, val catalog: Boolean)
     companion object {
         const val USER_AGENT = "VLC/3.0.21 LibVLC/3.0.21"
         fun client() = OkHttpClient.Builder().connectTimeout(15, TimeUnit.SECONDS).readTimeout(30, TimeUnit.SECONDS)
@@ -32,7 +34,7 @@ class XtreamApi(val credentials: Credentials, private val http: OkHttpClient = c
 
     private fun response(action: String? = null, extra: Pair<String, String>? = null): Response {
         try {
-            val request = Request.Builder().url(url(action, extra)).tag(Scope(requestTag, action in listOf("get_vod_info", "get_series_info"))).header("User-Agent", USER_AGENT).header("Accept", "application/json").build()
+            val request = Request.Builder().url(url(action, extra)).tag(Scope(requestTag, action in listOf("get_vod_info", "get_series_info"), action in listOf("get_vod_streams", "get_series", "get_live_streams", "get_vod_categories", "get_series_categories", "get_live_categories"))).header("User-Agent", USER_AGENT).header("Accept", "application/json").build()
             val response = http.newCall(request).execute()
             if (!response.isSuccessful) {
                 val code = response.code
@@ -64,36 +66,70 @@ class XtreamApi(val credentials: Credentials, private val http: OkHttpClient = c
 
     fun categories(kind: String): List<Category> {
         val result = mutableListOf<Category>()
-        array("get_${if (kind == "movie") "vod" else kind}_categories") { row ->
+        array("get_${if (kind == "movie") "vod" else kind}_categories", setOf("category_id", "category_name")) { row ->
             result += Category(row.text("category_id"), row.text("category_name", "Sem categoria"))
         }
         return result
     }
 
-    fun catalog(kind: String, consumer: (Content) -> Unit) {
-        val action = when (kind) { "movie" -> "get_vod_streams"; "series" -> "get_series"; else -> "get_live_streams" }
-        array(action) { row -> Content.fromApi(kind, row)?.let(consumer) }
+    private fun catalogAction(kind: String) = when (kind) { "movie" -> "get_vod_streams"; "series" -> "get_series"; else -> "get_live_streams" }
+    private val catalogFields = setOf("stream_id", "series_id", "name", "title", "category_id", "category_ids", "stream_icon", "cover", "added", "last_modified", "year", "rating", "plot", "container_extension")
+    fun catalog(kind: String, consumer: (Content) -> Unit) = array(catalogAction(kind), catalogFields) { row -> Content.fromApi(kind, row)?.let(consumer) }
+
+    /** Network I/O completes on disk before taking any SQLite writer lock. */
+    fun downloadCatalog(kind: String, directory: File): File {
+        directory.mkdirs()
+        val file = File.createTempFile("catalog-", ".json", directory)
+        try {
+            response(catalogAction(kind)).use { result ->
+                val body = result.body ?: throw ProviderFailure("Resposta vazia do provedor.")
+                body.byteStream().use { input -> file.outputStream().buffered(32768).use { output ->
+                    val buffer = ByteArray(32768); var total = 0L
+                    while (true) {
+                        if (Thread.currentThread().isInterrupted) throw InterruptedException()
+                        val count = input.read(buffer); if (count < 0) break
+                        total += count
+                        if (total > 128L * 1024 * 1024) throw ProviderFailure("O catálogo recebido excede o espaço reservado neste aparelho.")
+                        output.write(buffer, 0, count)
+                    }
+                } }
+            }
+            return file
+        } catch (error: Exception) { file.delete(); throw error }
+    }
+    fun importCatalog(kind: String, file: File, consumer: (Content) -> Unit) {
+        file.reader().buffered(32768).use { readArray(it, catalogFields) { row -> Content.fromApi(kind, row)?.let(consumer) } }
     }
 
-    private fun array(action: String, consumer: (JSONObject) -> Unit) {
+    private fun array(action: String, fields: Set<String>, consumer: (JSONObject) -> Unit) {
         try {
             response(action).use { response ->
-                val reader = JsonReader((response.body ?: throw ProviderFailure("Resposta vazia do provedor.")).charStream())
-                reader.use {
+                readArray((response.body ?: throw ProviderFailure("Resposta vazia do provedor.")).charStream(), fields, consumer)
+            }
+        } catch (error: ProviderFailure) { throw error }
+        catch (error: InterruptedException) { throw error }
+        catch (_: Exception) { throw ProviderFailure("Não foi possível ler o catálogo. Confira a conexão e tente atualizar.") }
+    }
+    private fun readArray(source: Reader, fields: Set<String>, consumer: (JSONObject) -> Unit) {
+                JsonReader(source).use {
                     if (it.peek() != JsonToken.BEGIN_ARRAY) throw ProviderFailure("O servidor enviou um catálogo em formato inesperado.")
                     it.beginArray()
                     var count = 0
                     while (it.hasNext()) {
                         if (Thread.currentThread().isInterrupted) throw InterruptedException()
                         if (++count > 300000) throw ProviderFailure("O catálogo excede o limite suportado neste aparelho.")
-                        (readValue(it) as? JSONObject)?.let(consumer)
+                        if (it.peek() != JsonToken.BEGIN_OBJECT) { it.skipValue(); continue }
+                        val row = JSONObject()
+                        it.beginObject()
+                        while (it.hasNext()) {
+                            val key = it.nextName()
+                            if (key in fields) row.put(key, readValue(it)) else it.skipValue()
+                        }
+                        it.endObject()
+                        consumer(row)
                     }
                     it.endArray()
                 }
-            }
-        } catch (error: ProviderFailure) { throw error }
-        catch (error: InterruptedException) { throw error }
-        catch (_: Exception) { throw ProviderFailure("Não foi possível ler o catálogo. Confira a conexão e tente atualizar.") }
     }
 
     private fun readValue(reader: JsonReader, depth: Int = 0): Any {
@@ -136,6 +172,7 @@ class XtreamApi(val credentials: Credentials, private val http: OkHttpClient = c
         (http.dispatcher.queuedCalls() + http.dispatcher.runningCalls()).filter { (it.request().tag() as? Scope)?.owner === requestTag }.forEach(Call::cancel)
     }
     fun cancelDetails() { (http.dispatcher.queuedCalls() + http.dispatcher.runningCalls()).filter { (it.request().tag() as? Scope)?.let { tag -> tag.owner === requestTag && tag.details } == true }.forEach(Call::cancel) }
+    fun cancelCatalogs() { (http.dispatcher.queuedCalls() + http.dispatcher.runningCalls()).filter { (it.request().tag() as? Scope)?.let { tag -> tag.owner === requestTag && tag.catalog } == true }.forEach(Call::cancel) }
 }
 
 fun java.io.InputStream.readBytesLimited(limit: Int): ByteArray {

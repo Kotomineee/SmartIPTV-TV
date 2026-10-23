@@ -35,6 +35,14 @@ class CatalogAdapter(
     private var recycler: RecyclerView? = null
     val retainedItems: Int get() = pages.values.sumOf { it.size }
     val count: Int get() = total
+    fun cachedItems(): List<Content> = pages.values.flatten().map { it.item }.distinctBy { it.uid }
+    fun updateIndicators(values: Map<String, CardData>) {
+        pages.entries.forEach { entry -> entry.setValue(entry.value.map { values[it.item.uid] ?: it }) }
+        recycler?.let { view -> for (index in 0 until view.childCount) {
+            val holder = view.getChildViewHolder(view.getChildAt(index)) as? Holder ?: continue
+            holder.card?.let { previous -> values[previous.item.uid]?.let { holder.indicators(it) } }
+        } }
+    }
     companion object { const val PAGE_SIZE = 40 }
 
     init { setHasStableIds(true) }
@@ -68,7 +76,9 @@ class CatalogAdapter(
                 pending.remove(page)
                 pages[page] = response.cards
                 val start = page * PAGE_SIZE
-                if (start < total) notifyItemRangeChanged(start, minOf(response.cards.size, total - start))
+                if (start < total) recycler?.post {
+                    if (current == generation) notifyItemRangeChanged(start, minOf(response.cards.size, total - start))
+                }
             }
         }
     }
@@ -92,12 +102,16 @@ class CatalogAdapter(
             images.clear(tile.poster)
             tile.title.text = value?.item?.name ?: "Carregando…"
             tile.description.text = value?.item?.let { if (it.kind == "episode") "T${it.season} · E${it.episode}" else it.year.ifEmpty { if (it.kind == "live") "AO VIVO" else "" } } ?: ""
+            indicators(value)
+            tile.contentDescription = value?.item?.displayName ?: "Carregando conteúdo"
+            tile.post { loadArtwork() }
+        }
+        fun indicators(value: CardData?) {
+            card = value
             tile.heart.visibility = if (value?.favorite == true) View.VISIBLE else View.GONE
             val progress = value?.progress
             tile.progress.visibility = if (progress != null && progress.duration > 0) View.VISIBLE else View.GONE
             tile.progress.progress = if (progress != null && progress.duration > 0) (progress.position * 1000 / progress.duration).toInt() else 0
-            tile.contentDescription = value?.item?.displayName ?: "Carregando conteúdo"
-            tile.post { loadArtwork() }
         }
         fun loadArtwork() {
             val value = card ?: return

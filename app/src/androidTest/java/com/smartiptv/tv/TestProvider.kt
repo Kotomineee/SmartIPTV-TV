@@ -16,6 +16,8 @@ import java.io.ByteArrayOutputStream
 import java.util.Collections
 
 class TestProvider(context: Context) : AutoCloseable {
+    @Volatile var largeCatalog = false
+    val catalogRequests = java.util.concurrent.atomic.AtomicInteger()
     val server = MockWebServer()
     val failedMedia = Collections.synchronizedSet(mutableSetOf<String>())
     val posterRequests = Collections.synchronizedList(mutableListOf<String>())
@@ -52,7 +54,12 @@ class TestProvider(context: Context) : AutoCloseable {
                 val user = request.requestUrl?.queryParameter("username")
                 val password = request.requestUrl?.queryParameter("password")
                 if (user != "demo" || password != "demopass") return json(JSONObject().put("user_info", JSONObject().put("auth", 0)))
-                return json(payload(request.requestUrl?.queryParameter("action") ?: ""))
+                val action = request.requestUrl?.queryParameter("action") ?: ""
+                if (action in listOf("get_vod_streams", "get_series", "get_live_streams")) {
+                    catalogRequests.incrementAndGet()
+                    if (largeCatalog) return largeResponse(action)
+                }
+                return json(payload(action))
             }
         }
         server.start(java.net.InetAddress.getByName("127.0.0.1"), 0)
@@ -61,6 +68,18 @@ class TestProvider(context: Context) : AutoCloseable {
         account = Credentials.validated(url, "demo", "demopass").account
     }
     private fun json(value: Any): MockResponse = MockResponse().setHeader("Content-Type", "application/json").setBody(value.toString())
+    private fun largeResponse(action: String): MockResponse {
+        val series = action == "get_series"
+        val count = when (action) { "get_vod_streams" -> 20000; "get_series" -> 6000; else -> 1000 }
+        val bytes = Buffer().writeUtf8("[")
+        repeat(count) { index ->
+            if (index > 0) bytes.writeUtf8(",")
+            bytes.writeUtf8("""{"${if (series) "series_id" else "stream_id"}":${index + 1},"name":"${if (series) "Novos caminhos" else "Filme"} ${index + 1}","category_id":"1","added":${index + 1},"last_modified":${index + 1},"${if (series) "cover" else "stream_icon"}":"$url/poster/${action}_$index.png"}""")
+        }
+        bytes.writeUtf8("]")
+        return MockResponse().setHeader("Content-Type", "application/json").setBody(bytes)
+            .setHeadersDelay(750, java.util.concurrent.TimeUnit.MILLISECONDS).throttleBody(32768, 25, java.util.concurrent.TimeUnit.MILLISECONDS)
+    }
     private fun payload(action: String): Any = when {
         action.isEmpty() -> JSONObject("""{"user_info":{"auth":1,"status":"Active","active_cons":"1","max_connections":"2","exp_date":"1893456000"}}""")
         action.endsWith("_categories") -> JSONArray().put(JSONObject().put("category_id", "1").put("category_name", "Lançamentos")).put(JSONObject().put("category_id", "2").put("category_name", "Aventura"))
