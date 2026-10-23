@@ -1,0 +1,128 @@
+package com.smartiptv.tv
+
+import android.content.ContentValues
+import android.content.Context
+import android.database.sqlite.SQLiteDatabase
+import android.database.sqlite.SQLiteOpenHelper
+import org.json.JSONObject
+
+class LibraryDb(context: Context) : SQLiteOpenHelper(context, "library.db", null, 1) {
+    init { setWriteAheadLoggingEnabled(true) }
+    override fun onCreate(db: SQLiteDatabase) {
+        db.execSQL("CREATE TABLE contents(account TEXT NOT NULL,uid TEXT NOT NULL,kind TEXT NOT NULL,name TEXT NOT NULL,norm TEXT NOT NULL,added INTEGER NOT NULL,item TEXT NOT NULL,PRIMARY KEY(account,uid))")
+        db.execSQL("CREATE INDEX content_order ON contents(account,kind,added DESC)")
+        db.execSQL("CREATE INDEX content_name ON contents(account,kind,norm)")
+        db.execSQL("CREATE TABLE item_category(account TEXT NOT NULL,uid TEXT NOT NULL,category TEXT NOT NULL,PRIMARY KEY(account,uid,category))")
+        db.execSQL("CREATE INDEX category_lookup ON item_category(account,category,uid)")
+        db.execSQL("CREATE TABLE categories(account TEXT NOT NULL,kind TEXT NOT NULL,id TEXT NOT NULL,name TEXT NOT NULL,PRIMARY KEY(account,kind,id))")
+        db.execSQL("CREATE TABLE library(account TEXT NOT NULL,uid TEXT NOT NULL,favorite INTEGER NOT NULL DEFAULT 0,position INTEGER NOT NULL DEFAULT 0,duration INTEGER NOT NULL DEFAULT 0,finished INTEGER NOT NULL DEFAULT 0,updated INTEGER NOT NULL DEFAULT 0,favorite_updated INTEGER NOT NULL DEFAULT 0,norm TEXT NOT NULL,item TEXT NOT NULL,PRIMARY KEY(account,uid))")
+        db.execSQL("CREATE TABLE loaded(account TEXT NOT NULL,kind TEXT NOT NULL,updated INTEGER NOT NULL,PRIMARY KEY(account,kind))")
+        db.execSQL("CREATE TABLE settings(name TEXT PRIMARY KEY,value TEXT)")
+    }
+    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) = Unit
+
+    fun hasCatalog(account: String): Boolean = readableDatabase.rawQuery("SELECT 1 FROM loaded WHERE account=? LIMIT 1", arrayOf(account)).use { it.moveToFirst() }
+
+    fun replaceSection(account: String, kind: String, categories: List<Category>, produce: ((Content) -> Unit) -> Unit) {
+        val db = writableDatabase
+        db.beginTransactionNonExclusive()
+        try {
+            db.execSQL("DELETE FROM item_category WHERE account=? AND uid IN (SELECT uid FROM contents WHERE account=? AND kind=?)", arrayOf(account, account, kind))
+            db.delete("contents", "account=? AND kind=?", arrayOf(account, kind))
+            db.delete("categories", "account=? AND kind=?", arrayOf(account, kind))
+            categories.forEach { group ->
+                db.insertWithOnConflict("categories", null, ContentValues().apply { put("account", account); put("kind", kind); put("id", group.id); put("name", group.name) }, SQLiteDatabase.CONFLICT_REPLACE)
+            }
+            val itemStatement = db.compileStatement("INSERT OR IGNORE INTO contents VALUES (?,?,?,?,?,?,?)")
+            val groupStatement = db.compileStatement("INSERT OR IGNORE INTO item_category VALUES (?,?,?)")
+            itemStatement.use { statement ->
+                groupStatement.use { categoryStatement ->
+                    produce { item ->
+                        statement.clearBindings()
+                        listOf(account, item.uid, kind, item.name, normalized(item.name)).forEachIndexed { index, value -> statement.bindString(index + 1, value) }
+                        statement.bindLong(6, item.added); statement.bindString(7, item.json().toString())
+                        val inserted = statement.executeInsert()
+                        if (inserted != -1L) item.categories.distinct().forEach { category ->
+                            categoryStatement.bindString(1, account); categoryStatement.bindString(2, item.uid); categoryStatement.bindString(3, category)
+                            categoryStatement.executeInsert()
+                        }
+                    }
+                }
+            }
+            db.execSQL("INSERT OR REPLACE INTO loaded VALUES (?,?,?)", arrayOf<Any>(account, kind, System.currentTimeMillis()))
+            db.setTransactionSuccessful()
+        } finally { db.endTransaction() }
+    }
+
+    fun categories(account: String, kind: String): List<Category> = readableDatabase.rawQuery("SELECT id,name FROM categories WHERE account=? AND kind=? ORDER BY rowid", arrayOf(account, kind)).use { cursor ->
+        buildList { while (cursor.moveToNext()) add(Category(cursor.getString(0), cursor.getString(1))) }
+    }
+
+    fun page(account: String, kind: String, category: String = "", search: String = "", alphabetical: Boolean = false, offset: Int = 0, limit: Int = 60): Page {
+        val fromLibrary = kind in listOf("favorites", "continue")
+        val conditions = mutableListOf("c.account=?")
+        val args = mutableListOf(account)
+        if (fromLibrary) conditions += if (kind == "favorites") "c.favorite=1" else "c.position>=1000 AND c.finished=0"
+        else if (kind != "all") { conditions += "c.kind=?"; args += kind }
+        if (category.isNotEmpty() && !fromLibrary) {
+            conditions += "EXISTS(SELECT 1 FROM item_category g WHERE g.account=c.account AND g.uid=c.uid AND g.category=?)"
+            args += category
+        }
+        if (search.isNotBlank()) {
+            conditions += "c.norm LIKE ? ESCAPE '\\'"
+            args += "%" + normalized(search.trim()).replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+        }
+        val table = if (fromLibrary) "library" else "contents"
+        val where = conditions.joinToString(" AND ")
+        val total = readableDatabase.rawQuery("SELECT COUNT(*) FROM $table c WHERE $where", args.toTypedArray()).use { it.moveToFirst(); it.getInt(0) }
+        val order = if (alphabetical) "c.norm ASC,c.uid ASC" else if (kind == "favorites") "c.favorite_updated DESC,c.uid ASC" else if (fromLibrary) "c.updated DESC,c.uid ASC" else "c.added DESC,c.uid ASC"
+        val items = readableDatabase.rawQuery("SELECT c.item FROM $table c WHERE $where ORDER BY $order LIMIT ? OFFSET ?", (args + limit.coerceIn(1, 100) + offset.coerceAtLeast(0)).map { it.toString() }.toTypedArray()).use { cursor ->
+            buildList { while (cursor.moveToNext()) add(Content.fromJson(JSONObject(cursor.getString(0)))) }
+        }
+        return Page(items, total)
+    }
+
+    fun searchAll(account: String, search: String, alphabetical: Boolean, offset: Int, limit: Int): Page = page(account, "all", search = search, alphabetical = alphabetical, offset = offset, limit = limit)
+
+    @Synchronized fun toggleFavorite(account: String, item: Content): Boolean {
+        val active = !isFavorite(account, item)
+        ensureLibrary(account, item)
+        writableDatabase.update("library", ContentValues().apply { put("favorite", if (active) 1 else 0); put("favorite_updated", System.currentTimeMillis()) }, "account=? AND uid=?", arrayOf(account, item.uid))
+        return active
+    }
+    fun isFavorite(account: String, item: Content): Boolean = readableDatabase.rawQuery("SELECT favorite FROM library WHERE account=? AND uid=?", arrayOf(account, item.uid)).use { it.moveToFirst() && it.getInt(0) == 1 }
+
+    private fun ensureLibrary(account: String, item: Content) {
+        writableDatabase.insertWithOnConflict("library", null, ContentValues().apply {
+            put("account", account); put("uid", item.uid); put("item", item.json().toString()); put("norm", normalized(item.name))
+        }, SQLiteDatabase.CONFLICT_IGNORE)
+    }
+
+    @Synchronized fun record(account: String, item: Content, position: Long, duration: Long, finished: Boolean = false) {
+        if (item.kind !in listOf("movie", "episode") || (position < 1000 && !finished)) return
+        val end = finished || (duration > 0 && position >= duration * .98 && duration - position <= 60000)
+        ensureLibrary(account, item)
+        writableDatabase.update("library", ContentValues().apply {
+            put("item", item.json().toString()); put("norm", normalized(item.name)); put("position", position.coerceAtLeast(0))
+            put("duration", duration.coerceAtLeast(0)); put("finished", if (end) 1 else 0); put("updated", System.currentTimeMillis())
+        }, "account=? AND uid=?", arrayOf(account, item.uid))
+    }
+    fun checkpoint(account: String, item: Content): Progress? {
+        if (item.kind == "series") {
+            return readableDatabase.rawQuery("SELECT item,position,duration,finished,updated FROM library WHERE account=? AND finished=0 AND position>=1000 ORDER BY updated DESC", arrayOf(account)).use { cursor ->
+                while (cursor.moveToNext()) {
+                    val entry = Content.fromJson(JSONObject(cursor.getString(0)))
+                    if (entry.kind == "episode" && entry.seriesId == item.id) return@use Progress(entry, cursor.getLong(1), cursor.getLong(2), false, cursor.getLong(4))
+                }
+                null
+            }
+        }
+        return readableDatabase.rawQuery("SELECT position,duration,finished,updated FROM library WHERE account=? AND uid=? AND finished=0 AND position>=1000", arrayOf(account, item.uid)).use { c ->
+            if (c.moveToFirst()) Progress(item, c.getLong(0), c.getLong(1), false, c.getLong(3)) else null
+        }
+    }
+    fun removeProgress(account: String, item: Content) { writableDatabase.execSQL("UPDATE library SET position=0,duration=0,finished=0 WHERE account=? AND uid=?", arrayOf(account, item.uid)) }
+    var autoNext: Boolean
+        get() = readableDatabase.rawQuery("SELECT value FROM settings WHERE name='auto_next'", null).use { it.moveToFirst() && it.getString(0) == "true" }
+        set(value) { writableDatabase.execSQL("INSERT OR REPLACE INTO settings VALUES ('auto_next',?)", arrayOf(value.toString())) }
+}

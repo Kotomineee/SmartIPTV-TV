@@ -1,0 +1,60 @@
+name: Fire TV build
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fire-tv-build
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Compile, test and check release
+        run: bash ./gradlew testDebugUnitTest lintRelease assembleRelease assembleDebugAndroidTest --console=plain
+      - name: Enable emulator acceleration
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Test TV remote and real media on Android 9
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 28
+          arch: x86
+          target: android-tv
+          profile: tv_1080p
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back none
+          script: bash ./gradlew connectedDebugAndroidTest --console=plain
+      - name: Collect interface evidence
+        if: always()
+        run: |
+          mkdir -p artifacts/screenshots
+          adb pull /sdcard/Android/data/com.smartiptv.tv/files/screenshots artifacts/screenshots || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: SmartIPTV-TV-test-results
+          path: |
+            app/build/reports/
+            app/build/outputs/androidTest-results/
+            artifacts/screenshots/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SmartIPTV-TV-unsigned
+          path: app/build/outputs/apk/release/app-release-unsigned.apk
+      # Releases are signed locally and published through Kotomineee's account.

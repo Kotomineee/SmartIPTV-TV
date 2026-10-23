@@ -1,0 +1,3 @@
+resume.mp4 is a synthetic 20-second H.264 fixture with two AAC audio tracks
+(Portuguese/English) and one Portuguese subtitle track. It is used only in
+the test APK and contains no IPTV provider content.

@@ -1,0 +1,15 @@
+<resources>
+    <style name="AppTheme" parent="android:style/Theme.Material.NoActionBar">
+        <item name="android:fontFamily">sans</item>
+        <item name="android:colorAccent">#65DFAD</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowBackground">#0B1011</item>
+        <item name="android:windowActionModeOverlay">true</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:windowFullscreen">true</item>
+        <item name="android:windowAnimationStyle">@null</item>
+        <item name="android:colorControlHighlight">#3265DFAD</item>
+        <item name="android:navigationBarColor">#000000</item>
+    </style>
+    <string name="app_name">SmartIPTV</string>
+</resources>
