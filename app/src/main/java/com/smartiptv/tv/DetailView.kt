@@ -152,18 +152,25 @@ class DetailView(
         images.clear(poster); backdrop.setImageDrawable(null); blurred = null
     }
     fun restoreArtwork() { if (!dismissed) images.load(item.artwork, poster) }
-    override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
-        super.onSizeChanged(w, h, oldw, oldh)
-        if (w > 0 && h > 0) panel.layoutParams = (panel.layoutParams as LayoutParams).apply {
+    override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+        val w = MeasureSpec.getSize(widthMeasureSpec); val h = MeasureSpec.getSize(heightMeasureSpec)
+        // Size the children before measuring them, including the first frame after a display change.
+        if (w > 0 && h > 0) (panel.layoutParams as LayoutParams).apply {
             width = minOf(context.dp(800), w - context.dp(48)); height = if (item.kind == "series") h - context.dp(32) else -2
         }
         val compact = h < context.dp(450)
-        closeRow.visibility = if (compact) GONE else VISIBLE
-        panel.pad(if (compact) 18 else 22, if (compact) 12 else 18)
+        val closeVisibility = if (compact) GONE else VISIBLE
+        if (closeRow.visibility != closeVisibility) closeRow.visibility = closeVisibility
+        val horizontal = if (compact) 18 else 22; val vertical = if (compact) 12 else 18
+        if (panel.paddingLeft != context.dp(horizontal) || panel.paddingTop != context.dp(vertical)) panel.pad(horizontal, vertical)
         val compactSeries = compact && item.kind == "series"
-        heading.maxLines = if (compactSeries) 1 else 2
-        heading.textSize = if (compactSeries) 18f else if (item.kind == "series") 22f else 24f
-        plot.maxLines = if (compactSeries) 1 else if (compact) 2 else if (item.kind == "series") 3 else 5
+        val titleLines = if (compactSeries) 1 else 2
+        if (heading.maxLines != titleLines) heading.maxLines = titleLines
+        val titleSize = if (compactSeries) 18f else if (item.kind == "series") 22f else 24f
+        if (kotlin.math.abs(heading.textSize - titleSize * resources.displayMetrics.scaledDensity) > .1f) heading.textSize = titleSize
+        val plotLines = if (compactSeries) 1 else if (compact) 2 else if (item.kind == "series") 3 else 5
+        if (plot.maxLines != plotLines) plot.maxLines = plotLines
+        super.onMeasure(widthMeasureSpec, heightMeasureSpec)
     }
     private inner class EpisodeAdapter(val list: List<Content>) : RecyclerView.Adapter<EpisodeAdapter.Holder>() {
         inner class Holder(val row: EpisodeRow) : RecyclerView.ViewHolder(row)

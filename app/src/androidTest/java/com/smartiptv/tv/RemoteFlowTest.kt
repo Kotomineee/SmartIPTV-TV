@@ -345,7 +345,15 @@ class RemoteFlowTest {
         }
         fun firstRow(activity: MainActivity) = activity.details!!.episodeList.findViewHolderForAdapterPosition(0)?.itemView as? DetailView.EpisodeRow
         fun expectWatched(value: Boolean) {
-            waitFor("Wrong watched episode badge: $value") { firstRow(it)?.badge?.visibility == if (value) View.VISIBLE else View.GONE }
+            waitFor("Wrong watched episode badge or clipped layout: $value") {
+                val badge = firstRow(it)?.badge
+                if (!value) badge?.visibility == View.GONE
+                else if (badge?.visibility != View.VISIBLE) false
+                else {
+                    val visible = Rect()
+                    badge.getGlobalVisibleRect(visible) && badge.width == visible.width() && badge.height == visible.height()
+                }
+            }
             ui { activity ->
                 val row = firstRow(activity)!!
                 assertEquals(value, row.contentDescription.toString().contains(", Assistido"))
