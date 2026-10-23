@@ -55,7 +55,7 @@ class TestProvider(context: Context) : AutoCloseable {
                 return json(payload(request.requestUrl?.queryParameter("action") ?: ""))
             }
         }
-        server.start()
+        server.start(java.net.InetAddress.getByName("127.0.0.1"), 0)
         // Resolve the fixture host on the instrumentation thread, never in a UI assertion.
         url = "http://127.0.0.1:${server.port}"
         account = Credentials.validated(url, "demo", "demopass").account

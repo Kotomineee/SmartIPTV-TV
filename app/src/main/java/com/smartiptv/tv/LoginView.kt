@@ -89,6 +89,22 @@ class LoginView(context: Context, vault: SessionVault, private val login: (Crede
         server.requestFocus()
     }
 
+    override fun dispatchKeyEvent(event: android.view.KeyEvent): Boolean {
+        if (event.keyCode in listOf(android.view.KeyEvent.KEYCODE_DPAD_DOWN, android.view.KeyEvent.KEYCODE_DPAD_UP)) {
+            val controls = listOf(server, username, password, remember, submit)
+            val focused = findFocus()
+            val index = if (focused === reveal) 2 else controls.indexOf(focused)
+            if (index >= 0) {
+                if (event.action == android.view.KeyEvent.ACTION_DOWN) {
+                    val next = (index + if (event.keyCode == android.view.KeyEvent.KEYCODE_DPAD_DOWN) 1 else -1).coerceIn(0, controls.lastIndex)
+                    controls[next].requestFocus()
+                }
+                return true
+            }
+        }
+        return super.dispatchKeyEvent(event)
+    }
+
     fun validate() {
         if (!submit.isEnabled) return
         try {

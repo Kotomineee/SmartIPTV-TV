@@ -25,7 +25,8 @@ class DetailView(
     private val panel = context.column().apply { pad(22, 18); background = shape(Palette.panel, context.dp(13).toFloat(), Color.rgb(66, 102, 83)); isClickable = true }
     private val poster = context.poster()
     private val plot = context.text(item.plot.ifBlank { "Carregando informações…" }, 12f, Color.rgb(178, 196, 187))
-    private val caption = context.text(item.year, 10f, Palette.muted)
+    private val caption = context.text(listOf(item.year, item.rating.takeIf { it.isNotBlank() && it != "0" }?.let { "Nota $it" } ?: "").filter { it.isNotBlank() }.joinToString(" · "), 10f, Palette.muted)
+    private val heading = context.text(item.name, if (item.kind == "series") 22f else 24f, bold = true).apply { maxLines = 2; ellipsize = android.text.TextUtils.TruncateAt.END }
     val favorite = context.button("Adicionar aos favoritos", symbol = "heart") { toggleFavorite() }
     val watch = context.button(if (item.kind == "series") "Assistir episódio" else "Assistir agora", true, "play") { selected()?.let { play(it, false, episodes) } }
     private val feedback = context.text("", 11f, Palette.muted)
@@ -57,7 +58,7 @@ class DetailView(
         val info = context.column()
         top.addView(info, LinearLayout.LayoutParams(0, -2, 1f))
         info.addView(context.eyebrow(when (item.kind) { "series" -> "SÉRIE"; "live" -> "TV AO VIVO"; else -> "FILME" })); info.gap(9)
-        info.addView(context.text(item.name, if (series) 22f else 24f, bold = true).apply { maxLines = 2; ellipsize = android.text.TextUtils.TruncateAt.END }); info.gap(8)
+        info.addView(heading); info.gap(8)
         info.addView(caption); info.gap(10)
         plot.maxLines = if (series) 3 else 5; plot.ellipsize = android.text.TextUtils.TruncateAt.END
         info.addView(plot); info.gap(11)
@@ -154,7 +155,10 @@ class DetailView(
         val compact = h < context.dp(450)
         closeRow.visibility = if (compact) GONE else VISIBLE
         panel.pad(if (compact) 18 else 22, if (compact) 12 else 18)
-        plot.maxLines = if (compact) 2 else if (item.kind == "series") 3 else 5
+        val compactSeries = compact && item.kind == "series"
+        heading.maxLines = if (compactSeries) 1 else 2
+        heading.textSize = if (compactSeries) 18f else if (item.kind == "series") 22f else 24f
+        plot.maxLines = if (compactSeries) 1 else if (compact) 2 else if (item.kind == "series") 3 else 5
     }
     private inner class EpisodeAdapter(val list: List<Content>) : RecyclerView.Adapter<EpisodeAdapter.Holder>() {
         inner class Holder(val button: Button) : RecyclerView.ViewHolder(button)

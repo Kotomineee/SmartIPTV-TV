@@ -35,7 +35,7 @@ class RemoteFlowTest {
         device = UiDevice.getInstance(instrumentation)
         androidx.test.uiautomator.Configurator.getInstance().setWaitForIdleTimeout(200).setWaitForSelectorTimeout(3000)
         scenario = ActivityScenario.launch(MainActivity::class.java)
-        waitFor("Login ready") { it.loginView?.submit?.isEnabled == true }
+        waitFor("Login ready") { it.loginView?.submit?.isEnabled == true && it.hasWindowFocus() }
     }
     @After fun cleanup() { device.executeShellCommand("wm size reset"); scenario.close(); provider.close() }
     private fun ui(action: (MainActivity) -> Unit) { scenario.onActivity(action) }
@@ -48,6 +48,8 @@ class RemoteFlowTest {
             if (result.get()) { android.util.Log.i("SmartIPTVTest", "Passed: $description"); return }
             SystemClock.sleep(80)
         }
+        ui { android.util.Log.e("SmartIPTVTest", "Window=${it.hasWindowFocus()} focus=${it.currentFocus?.contentDescription} login=${it.loginView?.feedback?.text}") }
+        capture("failure-" + description.replace(Regex("[^a-zA-Z0-9]"), "-"))
         throw AssertionError(description)
     }
     private fun capture(name: String) {
@@ -57,13 +59,16 @@ class RemoteFlowTest {
         directory.mkdirs()
         device.waitForIdle(200)
         assertTrue(device.takeScreenshot(File(directory, "$name.png")))
+        device.executeShellCommand("mkdir -p /sdcard/Download/SmartIPTV-TV-testshots")
+        device.executeShellCommand("cp ${File(directory, "$name.png").absolutePath} /sdcard/Download/SmartIPTV-TV-testshots/")
     }
     private fun login(remember: Boolean = true) {
         ui { activity ->
             val form = activity.loginView!!
             form.server.setText(provider.url); form.username.setText("demo"); form.password.setText("demopass")
-            form.remember.isChecked = remember; form.submit.requestFocus()
+            form.remember.isChecked = remember; assertTrue(form.submit.requestFocus())
         }
+        waitFor("Login button ready") { it.hasWindowFocus() && it.loginView!!.submit.hasFocus() }
         device.pressDPadCenter()
         waitFor("Catalog was not opened") { it.catalogView != null }
         waitFor("Catalog did not finish") { it.catalogView!!.refreshButton.isEnabled && it.database.page(provider.account, "movie").total == 120 }
@@ -94,7 +99,7 @@ class RemoteFlowTest {
         }
         capture("01-login-1080p")
         device.pressDPadDown()
-        ui { assertTrue("D-pad did not move to username", it.loginView!!.username.hasFocus()) }
+        waitFor("D-pad did not move to username") { it.loginView!!.username.hasFocus() }
         login()
         waitFor("Visible artwork did not load") { it.images.memoryBytes > 0 }
         capture("02-inicio")
@@ -211,6 +216,11 @@ class RemoteFlowTest {
                 assertTrue(activity.catalogView!!.grid.width > 0)
             }
             capture("09-layout-$size")
+            navigate("series"); ui { it.catalogView!!.focusContent() }; device.pressDPadCenter()
+            waitFor("Series layout not ready at $size") { it.details?.watch?.isEnabled == true && it.details!!.episodeList.childCount > 0 }
+            ui { assertTrue("Episode list too short at $size", it.details!!.episodeList.height >= it.dp(43)) }
+            capture("10-serie-$size")
+            device.pressBack(); waitFor("Series detail did not close") { it.details == null }
         }
         device.executeShellCommand("wm size reset")
     }
