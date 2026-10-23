@@ -80,154 +80,243 @@ class CatalogView(
         sidebar.addView(navScroll, LayoutParams(-1, 0, 1f))
         navigation.forEach { (key, title) ->
             val button = context.button(title, symbol = when (key) { "continue" -> "clock"; "favorites" -> "heart"; else -> key }) { navigate(key) }
-            button.textSize = 12f; button.gravity = Gravity.START or Gravity.CENTER_VERTICAL; button.pad(10, 6)…9988 tokens truncated…ECT value FROM settings WHERE name='auto_next'", null).use { it.moveToFirst() && it.getString(0) == "true" }
-            nextEpisode = value
-            preferences.edit().putBoolean("auto_next", value).apply()
+            button.textSize = 12f; button.gravity = Gravity.START or Gravity.CENTER_VERTICAL; button.pad(10, 6)
+            button.id = View.generateViewId()
+            navArea.addView(button, LayoutParams(-1, context.dp(39)).apply { bottomMargin = context.dp(3) })
+            nav[key] = button
         }
+        val settingsButton = context.button("Configurações", symbol = "settings") { navigate("settings") }.apply { gravity = Gravity.START or Gravity.CENTER_VERTICAL; textSize = 12f; id = View.generateViewId() }
+        sidebar.addView(settingsButton, LayoutParams(-1, context.dp(40))); nav["settings"] = settingsButton
+        sidebar.gap(11); sidebar.rule(); sidebar.gap(12); sidebar.addView(context.eyebrow("SUA CONTA")); sidebar.gap(9)
+        sidebar.addView(accountExpiration); sidebar.gap(6); sidebar.addView(accountConnections); sidebar.gap(8)
+        sidebar.addView(context.text("SmartIPTV · v${BuildConfig.VERSION_NAME}", 9f, Palette.muted))
+        main.pad(21, 20); addView(main, LayoutParams(0, -1, 1f))
+        val top = context.row()
+        top.addView(heading, LayoutParams(0, -2, 1f))
+        search.id = View.generateViewId()
+        top.addView(search, LayoutParams(context.dp(225), context.dp(38)))
+        main.addView(top); main.gap(10); main.addView(subtitle); main.gap(9)
+        main.addView(status); main.gap(6); main.addView(body, LayoutParams(-1, 0, 1f))
+        status.visibility = GONE
+        body.addView(home, FrameLayout.LayoutParams(-1, -1)); home.addView(homeBody, FrameLayout.LayoutParams(-1, -2))
+        body.addView(gridPage, FrameLayout.LayoutParams(-1, -1))
+        val tools = context.row()
+        tools.addView(count, LayoutParams(0, -2, 1f)); tools.addView(order, LayoutParams(-2, context.dp(36)))
+        gridPage.addView(tools); gridPage.gap(10); gridPage.addView(categoryRow, LayoutParams(-1, 0, 1f))
+        categories.layoutManager = LinearLayoutManager(context)
+        categories.isFocusable = false; categories.setHasFixedSize(true)
+        categoryRow.addView(categories, LayoutParams(context.dp(151), -1).apply { rightMargin = context.dp(12) })
+        categoryRow.addView(results, LayoutParams(0, -1, 1f))
+        results.addView(grid, FrameLayout.LayoutParams(-1, -1)); results.addView(empty, FrameLayout.LayoutParams(-1, -1))
+        grid.layoutManager = GridLayoutManager(context, 4)
+        grid.itemAnimator = null; grid.setHasFixedSize(true); grid.clipToPadding = false; grid.setItemViewCacheSize(2)
+        grid.setPadding(context.dp(2), context.dp(2), context.dp(2), context.dp(8))
+        adapter = CatalogAdapter(images, open, options, ::loadPage)
+        grid.adapter = adapter
+        grid.addOnScrollListener(object : RecyclerView.OnScrollListener() { override fun onScrolled(recyclerView: RecyclerView, dx: Int, dy: Int) { adapter.reloadPosters() } })
+        grid.addOnLayoutChangeListener { _, left, _, right, _, _, _, _, _ ->
+            val manager = grid.layoutManager as GridLayoutManager
+            val columns = ((right - left) / context.dp(128)).coerceIn(2, 8)
+            if (manager.spanCount != columns) manager.spanCount = columns
+            adapter.reloadPosters()
+        }
+        body.addView(settings, FrameLayout.LayoutParams(-1, -1)); buildSettings()
+        search.addTextChangedListener {
+            searchTask?.let(handler::removeCallbacks)
+            searchTask = Runnable { if (tab != "settings") render() }.also { handler.postDelayed(it, 300) }
+        }
+        search.setOnEditorActionListener { _, _, _ ->
+            (context.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager).hideSoftInputFromWindow(search.windowToken, 0)
+            render(); grid.post { focusContent() }; true
+        }
+        nav.values.forEach { button ->
+            button.nextFocusRightId = search.id
+            button.setOnFocusChangeListener { _, focused -> if (focused) focusAfterLoad = false }
+        }
+        search.nextFocusLeftId = nav.getValue("home").id
+        home.setOnScrollChangeListener { _, _, _, _, _ -> homeRows.forEach { it.second.reloadPosters() } }
+        navigate("home")
     }
 
-    fun hasCatalog(account: String): Boolean = readableDatabase.rawQuery("SELECT 1 FROM loaded WHERE account=? LIMIT 1", arrayOf(account)).use { it.moveToFirst() }
-    fun isFresh(account: String, kind: String, now: Long = System.currentTimeMillis()): Boolean = readableDatabase.rawQuery("SELECT updated FROM loaded WHERE account=? AND kind=?", arrayOf(account, kind)).use {
-        it.moveToFirst() && now - it.getLong(0) in 0 until 6 * 60 * 60 * 1000L
+    fun showAccount(account: Account) {
+        val date = account.expiration?.let { SimpleDateFormat("dd/MM/yyyy", Locale("pt", "BR")).format(Date(it * 1000)) } ?: "Não informado"
+        accountExpiration.text = "Vencimento: $date"
+        accountConnections.text = "Conexões ativas: ${account.active} de ${account.maximum}"
     }
-
-    fun replaceSection(account: String, kind: String, categories: List<Category>, produce: ((Content) -> Unit) -> Unit) = synchronized(importLock) {
-        val db = writableDatabase
-        // Build the new section in short batches. The active catalog stays readable until publication.
-        db.execSQL("DELETE FROM incoming_contents")
-        db.execSQL("DELETE FROM incoming_links")
-        var transaction = false
-        try {
-            val itemStatement = db.compileStatement("INSERT OR IGNORE INTO incoming_contents VALUES (?,?,?,?,?,?,?)")
-            val groupStatement = db.compileStatement("INSERT OR IGNORE INTO incoming_links VALUES (?,?,?)")
-            itemStatement.use { statement ->
-                groupStatement.use { categoryStatement ->
-                    var batch = 0
-                    produce { item ->
-                        if (Thread.currentThread().isInterrupted) throw InterruptedException()
-                        if (!transaction) { db.beginTransactionNonExclusive(); transaction = true }
-                        statement.clearBindings()
-                        listOf(account, item.uid, kind, item.name, normalized(item.name)).forEachIndexed { index, value -> statement.bindString(index + 1, value) }
-                        statement.bindLong(6, item.added); statement.bindString(7, item.json().toString())
-                        val inserted = statement.executeInsert()
-                        if (inserted != -1L) item.categories.distinct().forEach { category ->
-                            categoryStatement.bindString(1, account); categoryStatement.bindString(2, item.uid); categoryStatement.bindString(3, category)
-                            categoryStatement.executeInsert()
-                        }
-                        if (++batch == 250) {
-                            db.setTransactionSuccessful(); db.endTransaction(); transaction = false; batch = 0
-                        }
-                    }
+    fun message(text: String, error: Boolean = false) { status.text = text; status.setTextColor(if (error) Palette.error else Palette.green); status.visibility = if (text.isBlank()) GONE else VISIBLE }
+    fun refreshing(value: Boolean) { refreshButton.isEnabled = !value; refreshButton.text = if (value) "Atualizando…" else "Atualizar conteúdos" }
+    fun navigate(next: String) {
+        focusAfterLoad = false
+        beforeNavigate()
+        if (next != tab) {
+            restoreGrid = null; restoreCategory = null; restoreHomeY = 0; restoreHomeRows = emptyList()
+            queryEpoch++; images.switchScreen(); adapter.reset()
+            homeRows.forEach { it.first.adapter = null; it.second.reset() }; homeRows.clear(); homeBody.removeAllViews()
+            grid.recycledViewPool.clear(); category = ""
+        }
+        tab = next
+        nav.forEach { (key, button) -> button.background = context.focusBackground(selected = key == tab); button.setTextColor(if (key == tab) Palette.green else Palette.muted) }
+        heading.text = navigation.firstOrNull { it.first == tab }?.second ?: "Configurações"
+        subtitle.text = when (tab) {
+            "home" -> "O próximo play começa aqui."
+            "live" -> "Seus canais organizados nas categorias do provedor."
+            "movie" -> "Encontre seu próximo filme. Escolha uma categoria ou faça uma busca."
+            "series" -> "Explore suas séries e escolha a temporada e o episódio."
+            "continue" -> "Retome filmes e episódios do ponto em que parou."
+            "favorites" -> "Seus conteúdos favoritos, salvos neste aparelho para esta conta."
+            else -> "Personalize sua experiência no SmartIPTV."
+        }
+        search.visibility = if (tab == "settings") GONE else VISIBLE
+        updateOrder(); render()
+    }
+    private fun updateOrder() { order.text = if (alphabetical) "Nome A–Z" else if (tab == "continue") "Assistidos recentemente" else "Mais recentes" }
+    private fun render() {
+        home.visibility = if (tab == "home" && search.text.isBlank()) VISIBLE else GONE
+        settings.visibility = if (tab == "settings") VISIBLE else GONE
+        gridPage.visibility = if (home.visibility != VISIBLE && tab != "settings") VISIBLE else GONE
+        if (tab == "settings") { cancelQueries(); updateAutoNext(); return }
+        if (home.visibility == VISIBLE) buildHome() else { loadGrid(); fillCategories() }
+    }
+    fun reload() {
+        if (gridPage.visibility == VISIBLE && adapter.count > 0) {
+            restoreGrid = grid.layoutManager?.onSaveInstanceState()
+            restoreCategory = categories.layoutManager?.onSaveInstanceState()
+        }
+        if (home.visibility == VISIBLE) {
+            restoreHomeY = home.scrollY
+            restoreHomeRows = homeRows.map { it.first.layoutManager?.onSaveInstanceState() }
+        }
+        render()
+    }
+    fun restoreAfterPlayback() {
+        focusAfterLoad = !nav.values.any { it.hasFocus() } && !search.hasFocus() && !order.hasFocus() && !categories.hasFocus()
+        if (tab in listOf("continue", "favorites")) reload() else { refreshLibrary(); if (focusAfterLoad) { focusContent(); focusAfterLoad = false } }
+    }
+    fun catalogUpdated() { handler.removeCallbacks(updateCatalog); handler.postDelayed(updateCatalog, 200) }
+    fun refreshLibrary() {
+        if (tab in listOf("continue", "favorites")) { reload(); return }
+        val current = queryEpoch
+        val adapters = listOf(adapter) + homeRows.map { it.second }
+        val items = adapters.flatMap { it.cachedItems() }.distinctBy { it.uid }
+        if (items.isEmpty()) return
+        query(work = { db.cards(accountKey, Page(items, items.size)).cards.associateBy { it.item.uid } }, done = { values -> if (current == queryEpoch) adapters.forEach { it.updateIndicators(values) } })
+    }
+    private fun cancelQueries() { querySerial++; queries.forEach { it.cancel(false) }; queries.clear() }
+    private fun <T> query(work: () -> T, done: (T) -> Unit, failed: (String) -> Unit = {}) {
+        queries.removeAll { it.isDone }
+        val serial = querySerial
+        queries += jobs.run(work = work, done = { if (serial == querySerial) done(it) }, failed = { if (serial == querySerial) failed(it) })
+    }
+    override fun onDetachedFromWindow() {
+        cancelQueries(); handler.removeCallbacksAndMessages(null)
+        super.onDetachedFromWindow()
+    }
+    fun releasePosters() { images.switchScreen() }
+    fun restorePosters() { adapter.reloadPosters(); homeRows.forEach { it.second.reloadPosters() } }
+    fun focusContent() {
+        if (tab == "settings") { nextButton.requestFocus(); return }
+        if (home.visibility == VISIBLE) homeRows.firstOrNull()?.first?.getChildAt(0)?.requestFocus() ?: nav[tab]?.requestFocus()
+        else grid.getChildAt(0)?.requestFocus() ?: search.requestFocus()
+    }
+    override fun dispatchKeyEvent(event: android.view.KeyEvent): Boolean {
+        if (event.action == android.view.KeyEvent.ACTION_DOWN) {
+            focusAfterLoad = false
+            if (event.keyCode == android.view.KeyEvent.KEYCODE_DPAD_RIGHT && nav.values.any { it.hasFocus() }) { focusContent(); return true }
+            if (event.keyCode == android.view.KeyEvent.KEYCODE_DPAD_LEFT && grid.hasFocus()) {
+                val holder = grid.findContainingViewHolder(grid.findFocus() ?: grid)
+                val columns = (grid.layoutManager as GridLayoutManager).spanCount
+                if (holder != null && holder.bindingAdapterPosition % columns == 0) {
+                    if (categories.visibility == VISIBLE) categories.getChildAt(0)?.requestFocus() ?: nav[tab]?.requestFocus() else nav[tab]?.requestFocus()
+                    return true
                 }
             }
-            if (transaction) { db.setTransactionSuccessful(); db.endTransaction(); transaction = false }
-            if (Thread.currentThread().isInterrupted) throw InterruptedException()
-            db.beginTransactionNonExclusive(); transaction = true
-            db.execSQL("DELETE FROM item_category WHERE account=? AND uid IN (SELECT uid FROM contents WHERE account=? AND kind=?)", arrayOf(account, account, kind))
-            db.delete("contents", "account=? AND kind=?", arrayOf(account, kind))
-            db.delete("categories", "account=? AND kind=?", arrayOf(account, kind))
-            categories.forEach { group ->
-                db.insertWithOnConflict("categories", null, ContentValues().apply { put("account", account); put("kind", kind); put("id", group.id); put("name", group.name) }, SQLiteDatabase.CONFLICT_REPLACE)
-            }
-            db.execSQL("INSERT INTO contents SELECT * FROM incoming_contents")
-            db.execSQL("INSERT INTO item_category SELECT * FROM incoming_links")
-            db.execSQL("INSERT OR REPLACE INTO loaded VALUES (?,?,?)", arrayOf<Any>(account, kind, System.currentTimeMillis()))
-            db.setTransactionSuccessful()
-        } finally {
-            if (transaction) db.endTransaction()
-            db.execSQL("DELETE FROM incoming_contents")
-            db.execSQL("DELETE FROM incoming_links")
+        }
+        return super.dispatchKeyEvent(event)
+    }
+    private fun cards(page: Page): CardPage = db.cards(accountKey, page)
+    private fun loadPage(offset: Int, limit: Int, done: (CardPage) -> Unit) {
+        val current = queryEpoch
+        val kind = if (tab == "home") "all" else tab
+        val selected = category; val term = search.text.toString(); val alpha = alphabetical
+        query(work = { cards(if (kind == "all") searchAll(term, alpha, offset, limit) else db.page(accountKey, kind, selected, term, alpha, offset, limit)) }, done = { if (current == queryEpoch) done(it) }, failed = { if (current == queryEpoch) message(it, true) })
+    }
+    private fun searchAll(term: String, alpha: Boolean, offset: Int, limit: Int): Page = db.searchAll(accountKey, term, alpha, offset, limit)
+    private fun loadGrid() {
+        cancelQueries()
+        queryEpoch++
+        val current = queryEpoch
+        adapter.reset(); count.text = "Carregando…"; empty.text = "Carregando conteúdos…"; empty.visibility = VISIBLE; grid.visibility = INVISIBLE
+        loadPage(0, CatalogAdapter.PAGE_SIZE) { page ->
+            if (queryEpoch != current) return@loadPage
+            adapter.reset(page, tab == "live"); count.text = "${page.total} conteúdos"
+            restoreGrid?.let { grid.layoutManager?.onRestoreInstanceState(it) }; restoreGrid = null
+            empty.text = if (search.text.isNotBlank()) "Nenhum resultado encontrado" else if (tab == "continue") "Nenhum conteúdo em andamento" else if (tab == "favorites") "Seus favoritos ficam aqui" else "Nenhum conteúdo disponível"
+            empty.visibility = if (page.total == 0) VISIBLE else GONE; grid.visibility = if (page.total == 0) INVISIBLE else VISIBLE
+            if (focusAfterLoad) grid.post { if (grid.childCount > 0) { focusContent(); focusAfterLoad = false } }
         }
     }
-
-    fun categories(account: String, kind: String): List<Category> = readableDatabase.rawQuery("SELECT id,name FROM categories WHERE account=? AND kind=? ORDER BY rowid", arrayOf(account, kind)).use { cursor ->
-        buildList { while (cursor.moveToNext()) add(Category(cursor.getString(0), cursor.getString(1))) }
+    private fun fillCategories() {
+        val enabled = tab in listOf("live", "movie", "series")
+        categories.visibility = if (enabled) VISIBLE else GONE
+        if (!enabled) return
+        val current = queryEpoch; val kind = tab
+        query(work = { listOf(Category("", "Todas as categorias")) + db.categories(accountKey, kind) }, done = { groups ->
+            if (current != queryEpoch || kind != tab) return@query
+            categories.adapter = CategoryAdapter(groups, { category }) { selected -> category = selected; categories.adapter?.notifyDataSetChanged(); loadGrid() }
+            restoreCategory?.let { categories.layoutManager?.onRestoreInstanceState(it) }; restoreCategory = null
+        })
     }
-
-    fun page(account: String, kind: String, category: String = "", search: String = "", alphabetical: Boolean = false, offset: Int = 0, limit: Int = 60): Page {
-        val fromLibrary = kind in listOf("favorites", "continue")
-        val conditions = mutableListOf("c.account=?")
-        val args = mutableListOf(account)
-        if (fromLibrary) conditions += if (kind == "favorites") "c.favorite=1" else "c.position>=1000 AND c.finished=0"
-        else if (kind != "all") { conditions += "c.kind=?"; args += kind }
-        if (category.isNotEmpty() && !fromLibrary) {
-            conditions += "EXISTS(SELECT 1 FROM item_category g WHERE g.account=c.account AND g.uid=c.uid AND g.category=?)"
-            args += category
-        }
-        if (search.isNotBlank()) {
-            conditions += "c.norm LIKE ? ESCAPE '\\'"
-            args += "%" + normalized(search.trim()).replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
-        }
-        val table = if (fromLibrary) "library" else "contents"
-        val where = conditions.joinToString(" AND ")
-        val total = readableDatabase.rawQuery("SELECT COUNT(*) FROM $table c WHERE $where", args.toTypedArray()).use { it.moveToFirst(); it.getInt(0) }
-        val order = if (alphabetical) "c.norm ASC,c.uid ASC" else if (kind == "favorites") "c.favorite_updated DESC,c.uid ASC" else if (fromLibrary) "c.updated DESC,c.uid ASC" else "c.added DESC,c.uid ASC"
-        val items = readableDatabase.rawQuery("SELECT c.item FROM $table c WHERE $where ORDER BY $order LIMIT ? OFFSET ?", (args + limit.coerceIn(1, 100) + offset.coerceAtLeast(0)).map { it.toString() }.toTypedArray()).use { cursor ->
-            buildList { while (cursor.moveToNext()) add(Content.fromJson(JSONObject(cursor.getString(0)))) }
-        }
-        return Page(items, total)
-    }
-
-    fun searchAll(account: String, search: String, alphabetical: Boolean, offset: Int, limit: Int): Page = page(account, "all", search = search, alphabetical = alphabetical, offset = offset, limit = limit)
-
-    fun cards(account: String, page: Page): CardPage {
-        if (page.items.isEmpty()) return CardPage(emptyList(), page.total)
-        val rows = mutableMapOf<String, Pair<Boolean, Progress?>>()
-        val items = page.items.associateBy { it.uid }
-        val placeholders = items.keys.joinToString(",") { "?" }
-        readableDatabase.rawQuery("SELECT uid,favorite,position,duration,finished,updated FROM library WHERE account=? AND uid IN ($placeholders)", (listOf(account) + items.keys).toTypedArray()).use { c ->
-            while (c.moveToNext()) {
-                val item = items.getValue(c.getString(0))
-                rows[item.uid] = (c.getInt(1) == 1) to if (c.getLong(2) >= 1000 && c.getInt(4) == 0) Progress(item, c.getLong(2), c.getLong(3), false, c.getLong(5)) else null
-            }
-        }
-        return CardPage(page.items.map { item -> CardData(item, rows[item.uid]?.first == true, if (item.kind == "series") checkpoint(account, item) else rows[item.uid]?.second) }, page.total)
-    }
-
-    fun toggleFavorite(account: String, item: Content): Boolean {
-        val db = writableDatabase
-        db.beginTransactionNonExclusive()
-        try {
-        val active = !isFavorite(account, item)
-        ensureLibrary(account, item)
-        writableDatabase.update("library", ContentValues().apply { put("favorite", if (active) 1 else 0); put("favorite_updated", System.currentTimeMillis()) }, "account=? AND uid=?", arrayOf(account, item.uid))
-        db.setTransactionSuccessful()
-        return active
-        } finally { db.endTransaction() }
-    }
-    fun isFavorite(account: String, item: Content): Boolean = readableDatabase.rawQuery("SELECT favorite FROM library WHERE account=? AND uid=?", arrayOf(account, item.uid)).use { it.moveToFirst() && it.getInt(0) == 1 }
-
-    private fun ensureLibrary(account: String, item: Content) {
-        writableDatabase.insertWithOnConflict("library", null, ContentValues().apply {
-            put("account", account); put("uid", item.uid); put("item", item.json().toString()); put("norm", normalized(item.name)); put("series_id", item.seriesId)
-        }, SQLiteDatabase.CONFLICT_IGNORE)
-    }
-
-    fun record(account: String, item: Content, position: Long, duration: Long, finished: Boolean = false) {
-        if (item.kind !in listOf("movie", "episode") || (position < 1000 && !finished)) return
-        val end = finished || (duration > 0 && position >= duration * .98 && duration - position <= 60000)
-        ensureLibrary(account, item)
-        writableDatabase.update("library", ContentValues().apply {
-            put("item", item.json().toString()); put("norm", normalized(item.name)); put("series_id", item.seriesId); put("position", position.coerceAtLeast(0))
-            put("duration", duration.coerceAtLeast(0)); put("finished", if (end) 1 else 0); put("updated", System.currentTimeMillis())
-        }, "account=? AND uid=?", arrayOf(account, item.uid))
-    }
-    fun checkpoint(account: String, item: Content): Progress? {
-        if (item.kind == "series") {
-            return readableDatabase.rawQuery("SELECT item,position,duration,finished,updated FROM library WHERE account=? AND series_id=? AND finished=0 AND position>=1000 ORDER BY updated DESC LIMIT 1", arrayOf(account, item.id)).use { cursor ->
-                while (cursor.moveToNext()) {
-                    val entry = Content.fromJson(JSONObject(cursor.getString(0)))
-                    if (entry.kind == "episode" && entry.seriesId == item.id) return@use Progress(entry, cursor.getLong(1), cursor.getLong(2), false, cursor.getLong(4))
+    private fun buildHome() {
+        cancelQueries()
+        queryEpoch++; val current = queryEpoch
+        homeRows.forEach { it.first.adapter = null }; homeRows.clear(); homeBody.removeAllViews()
+        val banner = context.column().apply { background = shape(Color.rgb(25, 48, 38), context.dp(11).toFloat()); pad(19, 17) }
+        banner.addView(context.eyebrow("SEU CATÁLOGO, DO SEU JEITO")); banner.gap(8)
+        banner.addView(context.text("O próximo play começa aqui.", 24f, bold = true)); banner.gap(7)
+        banner.addView(context.text("Descubra o que chegou e volte às suas histórias favoritas.", 12f, Palette.muted))
+        homeBody.addView(banner, LayoutParams(-1, -2)); homeBody.gap(19)
+        for ((rowIndex, entry) in listOf("movie" to "Filmes recém-adicionados", "series" to "Séries atualizadas", "live" to "Canais recém-adicionados").withIndex()) {
+            val (kind, title) = entry
+            val row = context.row(); row.addView(context.text(title, 17f, bold = true), LayoutParams(0, -2, 1f))
+            row.addView(context.button("Ver todos →") { navigate(kind); focusContent() }, LayoutParams(-2, context.dp(35)))
+            homeBody.addView(row); homeBody.gap(9)
+            val gallery = RecyclerView(context).apply { layoutManager = LinearLayoutManager(context, RecyclerView.HORIZONTAL, false); itemAnimator = null; setItemViewCacheSize(1) }
+            val galleryAdapter = CatalogAdapter(images, open, options, { offset, limit, done ->
+                query(work = { cards(db.page(accountKey, kind, offset = offset, limit = minOf(limit, 18))) }, done = { if (current == queryEpoch) done(it.copy(total = minOf(it.total, 18))) })
+            }, true)
+            gallery.adapter = galleryAdapter
+            gallery.addOnScrollListener(object : RecyclerView.OnScrollListener() { override fun onScrolled(recyclerView: RecyclerView, dx: Int, dy: Int) { galleryAdapter.reloadPosters() } })
+            homeRows += gallery to galleryAdapter
+            homeBody.addView(gallery, LayoutParams(-1, context.dp(if (kind == "live") 153 else 219))); homeBody.gap(19)
+            query(work = { cards(db.page(accountKey, kind, limit = 18)) }, done = {
+                if (current == queryEpoch) {
+                    galleryAdapter.reset(it.copy(total = minOf(it.total, 18)), kind == "live")
+                    restoreHomeRows.getOrNull(rowIndex)?.let { state -> gallery.layoutManager?.onRestoreInstanceState(state) }
+                    if (rowIndex == 0 && focusAfterLoad) gallery.post { focusContent(); focusAfterLoad = false }
                 }
-                null
-            }
+            })
         }
-        return readableDatabase.rawQuery("SELECT position,duration,finished,updated FROM library WHERE account=? AND uid=? AND finished=0 AND position>=1000", arrayOf(account, item.uid)).use { c ->
-            if (c.moveToFirst()) Progress(item, c.getLong(0), c.getLong(1), false, c.getLong(3)) else null
+        home.post { if (current == queryEpoch) home.scrollTo(0, restoreHomeY) }
+    }
+    private fun buildSettings() {
+        val card = context.column().apply { background = shape(Palette.panel, context.dp(12).toFloat()); pad(20); gravity = Gravity.TOP }
+        card.addView(context.text("Reprodução", 19f, bold = true)); card.gap(11)
+        card.addView(context.text("Escolha se a série deve continuar automaticamente ao terminar um episódio.", 12f, Palette.muted)); card.gap(14)
+        card.addView(nextButton, LayoutParams(-1, context.dp(43))); card.gap(18); card.rule(); card.gap(18)
+        card.addView(context.text("Conta e catálogo", 19f, bold = true)); card.gap(13)
+        card.addView(refreshButton, LayoutParams(-1, context.dp(43))); card.gap(12)
+        card.addView(logoutButton, LayoutParams(-1, context.dp(43)))
+        val scroll = ScrollView(context); scroll.addView(card); settings.addView(scroll, LayoutParams(-1, -1))
+    }
+    private fun updateAutoNext() { nextButton.text = "Reproduzir próximo episódio: ${if (db.autoNext) "Ligado" else "Desligado"}" }
+
+    private inner class CategoryAdapter(val groups: List<Category>, val selected: () -> String, val choose: (String) -> Unit) : RecyclerView.Adapter<CategoryAdapter.Holder>() {
+        inner class Holder(val button: Button) : RecyclerView.ViewHolder(button)
+        override fun getItemCount() = groups.size
+        override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): Holder = Holder(context.button("") {}.apply { textSize = 11f; gravity = Gravity.START or Gravity.CENTER_VERTICAL; maxLines = 2; layoutParams = RecyclerView.LayoutParams(-1, context.dp(43)).apply { bottomMargin = context.dp(5) } })
+        override fun onBindViewHolder(holder: Holder, position: Int) {
+            val group = groups[position]; holder.button.text = group.name; holder.button.contentDescription = group.name
+            holder.button.background = context.focusBackground(selected = group.id == selected()); holder.button.setOnClickListener { choose(group.id) }
         }
     }
-    fun removeProgress(account: String, item: Content) { writableDatabase.execSQL("UPDATE library SET position=0,duration=0,finished=0 WHERE account=? AND uid=?", arrayOf(account, item.uid)) }
-    var autoNext: Boolean
-        get() = nextEpisode
-        set(value) { nextEpisode = value; preferences.edit().putBoolean("auto_next", value).apply() }
 }
