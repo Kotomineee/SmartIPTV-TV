@@ -80,7 +80,7 @@ class DetailView(
             favorite.text = if (active) "Remover dos favoritos" else "Adicionar aos favoritos"
             checkpoint = progress
             if (progress != null) {
-                secondary.addView(context.button(if (series) "Continuar episódio" else "Assistir do início") { play(if (series) progress.item else item, !series, episodes) }, LinearLayout.LayoutParams(-2, context.dp(36)).apply { topMargin = context.dp(8) })
+                secondary.addView(context.button(if (series) "Continuar episódio" else "Assistir do início") { play(if (series) progress.item else item, !series, episodes) }, LinearLayout.LayoutParams(-2, context.dp(40)).apply { topMargin = context.dp(8) })
                 if (!series) watch.text = "Continuar assistindo"
                 else if (episodes.isNotEmpty()) selectSeason(progress.item.season, progress.item.uid)
             }

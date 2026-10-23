@@ -55,13 +55,12 @@ class RemoteFlowTest {
     }
     private fun capture(name: String) {
         android.util.Log.i("SmartIPTVTest", "Capture: $name")
-        val context = InstrumentationRegistry.getInstrumentation().targetContext
-        val directory = context.getExternalFilesDir("screenshots")!!
-        directory.mkdirs()
         device.waitForIdle(200)
-        assertTrue(device.takeScreenshot(File(directory, "$name.png")))
         device.executeShellCommand("mkdir -p /sdcard/Download/SmartIPTV-TV-testshots")
-        device.executeShellCommand("cp ${File(directory, "$name.png").absolutePath} /sdcard/Download/SmartIPTV-TV-testshots/")
+        val path = "/sdcard/Download/SmartIPTV-TV-testshots/$name.png"
+        // Android 9 UiAutomation crops captures after wm size changes; capture the display itself.
+        device.executeShellCommand("screencap -p $path")
+        assertTrue("Screenshot missing: $name", (device.executeShellCommand("stat -c %s $path").trim().toLongOrNull() ?: 0) > 1000)
     }
     private fun login(remember: Boolean = true) {
         ui { activity ->
@@ -208,11 +207,15 @@ class RemoteFlowTest {
         for (size in listOf("1280x720", "1920x1080")) {
             device.executeShellCommand("wm size $size")
             SystemClock.sleep(1200)
+            val dimensions = size.split('x').map(String::toInt)
+            waitFor("Display bounds did not update: $size") { it.window.decorView.width == dimensions[0] && it.window.decorView.height == dimensions[1] }
             navigate("movie")
             ui { activity ->
                 val screen = Rect(0, 0, activity.window.decorView.width, activity.window.decorView.height)
                 val order = Rect(); activity.catalogView!!.order.getGlobalVisibleRect(order)
                 assertTrue("Sort control clipped at $size: $order", screen.contains(order))
+                assertEquals(activity.catalogView!!.order.width, order.width())
+                assertEquals(activity.catalogView!!.order.height, order.height())
                 assertTrue(activity.catalogView!!.grid.childCount > 0)
                 assertTrue(activity.catalogView!!.grid.width > 0)
             }
@@ -220,7 +223,15 @@ class RemoteFlowTest {
             ui { it.database.record(provider.account, Content("episode", "101", "Episódio 1", seriesId = "4", seriesName = "Novos caminhos 4", season = 1, episode = 1), 5000, 20000) }
             navigate("series"); ui { it.catalogView!!.focusContent() }; device.pressDPadCenter()
             waitFor("Series layout not ready at $size") { it.details?.watch?.isEnabled == true && it.details!!.episodeList.childCount > 0 }
-            ui { assertTrue("Episode list too short at $size", it.details!!.episodeList.height >= it.dp(43)) }
+            ui { activity ->
+                val detail = activity.details!!
+                assertTrue("Episode list too short at $size", detail.episodeList.height >= activity.dp(43))
+                listOf(detail.watch, detail.favorite, detail.seasons, detail.episodeList).forEach { view ->
+                    val visible = Rect(); assertTrue(view.getGlobalVisibleRect(visible))
+                    assertEquals("Control clipped horizontally at $size", view.width, visible.width())
+                    assertEquals("Control clipped vertically at $size", view.height, visible.height())
+                }
+            }
             capture("10-serie-$size")
             device.pressBack(); waitFor("Series detail did not close") { it.details == null }
         }
