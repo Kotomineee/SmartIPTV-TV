@@ -140,6 +140,13 @@ class CatalogView(
             adapter.reloadPosters()
             favoriteSections.forEach { it.cards.reloadPosters() }
         }
+        grid.viewTreeObserver.addOnGlobalLayoutListener {
+            // A section reload may replace every child after its query callback.
+            // Keep the focus request until a visible card actually accepts it.
+            if (focusAfterLoad && grid.isShown && descendantFocusability != FOCUS_BLOCK_DESCENDANTS) {
+                focusAfterLoad = !focusContent()
+            }
+        }
         body.addView(settings, FrameLayout.LayoutParams(-1, -1)); buildSettings()
         search.addTextChangedListener {
             searchTask?.let(handler::removeCallbacks)
@@ -216,13 +223,14 @@ class CatalogView(
     }
     fun restoreAfterPlayback(focus: Boolean = true) {
         focusAfterLoad = focus && !nav.values.any { it.hasFocus() } && !search.hasFocus() && !order.hasFocus() && !categories.hasFocus()
-        if (tab in listOf("continue", "favorites")) reload() else { refreshLibrary(); if (focusAfterLoad) { focusContent(); focusAfterLoad = false } }
+        if (tab in listOf("continue", "favorites")) reload() else { refreshLibrary(); if (focusAfterLoad) focusAfterLoad = !focusContent() }
     }
     fun catalogUpdated(defer: Boolean = false) {
         catalogPending = true; handler.removeCallbacks(updateCatalog)
         if (!defer) handler.postDelayed(updateCatalog, 200)
     }
-    fun refreshLibrary() {
+    fun refreshLibrary(restoreFocus: Boolean = false) {
+        if (restoreFocus) focusAfterLoad = true
         if (catalogPending) { catalogPending = false; reload(); return }
         if (tab in listOf("continue", "favorites")) { reload(); return }
         val current = queryEpoch
@@ -243,10 +251,12 @@ class CatalogView(
     }
     fun releasePosters() { images.switchScreen() }
     fun restorePosters() { adapter.reloadPosters(); homeRows.forEach { it.second.reloadPosters() }; favoriteSections.forEach { it.cards.reloadPosters() } }
-    fun focusContent() {
-        if (tab == "settings") { nextButton.requestFocus(); return }
-        if (home.visibility == VISIBLE) homeRows.firstOrNull()?.first?.getChildAt(0)?.requestFocus() ?: nav[tab]?.requestFocus()
-        else (0 until grid.childCount).map { grid.getChildAt(it) }.firstOrNull { it.isFocusable }?.requestFocus() ?: search.requestFocus()
+    fun focusContent(): Boolean {
+        if (descendantFocusability == FOCUS_BLOCK_DESCENDANTS) return false
+        if (tab == "settings") return nextButton.requestFocus()
+        if (home.visibility == VISIBLE) return homeRows.firstOrNull()?.first?.getChildAt(0)?.requestFocus() ?: nav[tab]?.requestFocus() ?: false
+        if (!grid.isShown) return false
+        return (0 until grid.childCount).map { grid.getChildAt(it) }.firstOrNull { it.isFocusable }?.requestFocus() == true
     }
     override fun dispatchKeyEvent(event: android.view.KeyEvent): Boolean {
         if (event.action == android.view.KeyEvent.ACTION_DOWN) {
@@ -283,7 +293,7 @@ class CatalogView(
             restoreGrid?.let { grid.layoutManager?.onRestoreInstanceState(it) }; restoreGrid = null
             empty.text = if (search.text.isNotBlank()) "Nenhum resultado encontrado" else if (tab == "continue") "Nenhum conteúdo em andamento" else if (tab == "favorites") "Seus favoritos ficam aqui" else "Nenhum conteúdo disponível"
             empty.visibility = if (page.total == 0) VISIBLE else GONE; grid.visibility = if (page.total == 0) INVISIBLE else VISIBLE
-            if (focusAfterLoad) grid.post { if (grid.childCount > 0 && descendantFocusability != FOCUS_BLOCK_DESCENDANTS) { focusContent(); focusAfterLoad = false } }
+            if (focusAfterLoad) grid.post { if (descendantFocusability != FOCUS_BLOCK_DESCENDANTS) focusAfterLoad = !focusContent() }
         }
     }
     private fun loadFavorites() {
@@ -311,7 +321,7 @@ class CatalogView(
             count.text = "$total conteúdos"
             empty.text = if (term.isNotBlank()) "Nenhum resultado encontrado" else "Seus favoritos ficam aqui"
             empty.visibility = if (total == 0) VISIBLE else GONE; grid.visibility = if (total == 0) INVISIBLE else VISIBLE
-            if (focusAfterLoad) grid.post { if (current == queryEpoch && descendantFocusability != FOCUS_BLOCK_DESCENDANTS) { focusContent(); focusAfterLoad = false } }
+            if (focusAfterLoad) grid.post { if (current == queryEpoch && descendantFocusability != FOCUS_BLOCK_DESCENDANTS) focusAfterLoad = !focusContent() }
         }, failed = { if (current == queryEpoch) { empty.text = "Não foi possível carregar os favoritos. Tente novamente."; message(it, true) } })
     }
     private fun fillCategories() {
@@ -351,7 +361,7 @@ class CatalogView(
                 if (current == queryEpoch) {
                     galleryAdapter.reset(it.copy(total = minOf(it.total, 18)), kind == "live")
                     restoreHomeRows.getOrNull(rowIndex)?.let { state -> gallery.layoutManager?.onRestoreInstanceState(state) }
-                    if (rowIndex == 0 && focusAfterLoad) gallery.post { focusContent(); focusAfterLoad = false }
+                    if (rowIndex == 0 && focusAfterLoad) gallery.post { focusAfterLoad = !focusContent() }
                 }
             })
         }

@@ -148,10 +148,11 @@ class MainActivity : Activity() {
             detail.dismiss(); root.removeView(detail); details = null
             catalogView?.descendantFocusability = ViewGroup.FOCUS_AFTER_DESCENDANTS
             catalogView?.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_AUTO
-            if (focusedBeforeDetails?.takeIf { it.isAttachedToWindow }?.requestFocus() != true) catalogView?.focusContent()
+            val restoredFocus = focusedBeforeDetails?.takeIf { it.isAttachedToWindow }?.requestFocus() == true
+            if (!restoredFocus) catalogView?.focusContent()
             focusedBeforeDetails = null
             catalogView?.restorePosters()
-            catalogView?.refreshLibrary()
+            catalogView?.refreshLibrary(restoreFocus = !restoredFocus)
         }
     }
     private fun options(item: Content) {
