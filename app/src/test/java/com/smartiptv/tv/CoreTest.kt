@@ -344,4 +344,14 @@ class CoreTest {
         db.autoNext = false; db.close(); db = LibraryDb(context); db.prepare()
         assertFalse(db.autoNext)
     }
+
+    @Test fun detailResponsesSkipUnusedDataWithoutKeepingRawCopies() {
+        response("""{"movie_data":{"unused":[${"0,".repeat(50000)}0]},"info":{"backdrop_path":["unused"],"plot":"Sinopse preservada"}}""")
+        assertEquals("Sinopse preservada", api().movieInfo(movie))
+        response("""{"episodes":{"1":[{"id":"101","season":1,"episode_num":1,"title":"Estreia","info":{"plot":"História","duration_secs":60,"ignored":[1,2,3]}}]},"info":{"plot":"A série"}}""")
+        val info = api().seriesInfo(series)
+        assertEquals("A série", info.plot)
+        assertEquals(60000L, info.episodes.single().duration)
+        assertEquals("História", info.episodes.single().plot)
+    }
 }

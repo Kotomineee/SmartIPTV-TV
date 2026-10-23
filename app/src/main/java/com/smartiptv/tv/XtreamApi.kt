@@ -50,8 +50,21 @@ class XtreamApi(val credentials: Credentials, private val http: OkHttpClient = c
     private fun objectResponse(action: String? = null, extra: Pair<String, String>? = null): JSONObject {
         return response(action, extra).use { response ->
             val body = response.body ?: throw ProviderFailure("O servidor enviou uma resposta vazia.")
-            val raw = body.byteStream().use { it.readBytesLimited(6 * 1024 * 1024) }
-            try { JSONObject(String(raw, Charsets.UTF_8)) }
+            val source = body.byteStream()
+            val bounded = object : java.io.InputStream() {
+                var bytes = 0L
+                private fun counted(size: Int): Int {
+                    if (size > 0) bytes += size
+                    if (bytes > 6L * 1024 * 1024) throw ProviderFailure("A resposta recebida excede o limite suportado.")
+                    return size
+                }
+                override fun read(): Int { val value = source.read(); if (value >= 0) counted(1); return value }
+                override fun read(buffer: ByteArray, offset: Int, length: Int) = counted(source.read(buffer, offset, length))
+                override fun close() = source.close()
+            }
+            try { JsonReader(java.io.InputStreamReader(bounded, Charsets.UTF_8)).use { readValue(it) as? JSONObject ?: throw ProviderFailure("O servidor não retornou uma resposta Xtream válida.") } }
+            catch (error: ProviderFailure) { throw error }
+            catch (error: InterruptedException) { throw error }
             catch (_: Exception) { throw ProviderFailure("O servidor não retornou uma resposta Xtream válida.") }
         }
     }
@@ -133,12 +146,16 @@ class XtreamApi(val credentials: Credentials, private val http: OkHttpClient = c
     }
 
     private fun readValue(reader: JsonReader, depth: Int = 0): Any {
+        if (Thread.currentThread().isInterrupted) throw InterruptedException()
         if (depth > 15) throw ProviderFailure("O catálogo recebido não é válido.")
         return when (reader.peek()) {
             JsonToken.BEGIN_OBJECT -> {
                 val result = JSONObject()
                 reader.beginObject()
-                while (reader.hasNext()) result.put(reader.nextName(), readValue(reader, depth + 1))
+                while (reader.hasNext()) {
+                    val key = reader.nextName()
+                    if (key in detailFields || key.toIntOrNull() != null) result.put(key, readValue(reader, depth + 1)) else reader.skipValue()
+                }
                 reader.endObject()
                 result
             }
@@ -154,6 +171,8 @@ class XtreamApi(val credentials: Credentials, private val http: OkHttpClient = c
             else -> reader.nextString().take(18000)
         }
     }
+
+    private val detailFields = setOf("user_info", "auth", "status", "exp_date", "active_cons", "max_connections", "info", "episodes", "id", "season", "episode_num", "title", "container_extension", "added", "plot", "description", "duration_secs")
 
     fun movieInfo(item: Content): String = objectResponse("get_vod_info", "vod_id" to item.id).optJSONObject("info")?.let {
         it.text("plot", it.text("description", item.plot))

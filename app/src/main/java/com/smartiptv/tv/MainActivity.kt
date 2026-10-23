@@ -87,7 +87,7 @@ class MainActivity : Activity() {
             CatalogSync(client, database, cacheDir).refresh(force, priority) { kind ->
                 jobs.ui {
                     if (token == generation) {
-                        if (playerView == null && details == null && (screen.tab == "home" || screen.tab == kind)) screen.catalogUpdated()
+                        if (screen.tab == "home" || screen.tab == kind) screen.catalogUpdated(playerView != null || details != null)
                     }
                 }
             }

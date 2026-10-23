@@ -41,7 +41,10 @@ class CatalogView(
     private var searchTask: Runnable? = null
     private val queries = mutableListOf<Future<*>>()
     private var querySerial = 0
-    private val updateCatalog = Runnable { reload() }
+    private var catalogPending = false
+    private val updateCatalog = Runnable {
+        if (isShown && descendantFocusability != FOCUS_BLOCK_DESCENDANTS) { catalogPending = false; reload() }
+    }
     private val heading = context.text("Início", 25f, bold = true)
     private val subtitle = context.text("", 11f, Palette.muted)
     private val status = context.text("", 11f, Palette.green)
@@ -178,6 +181,7 @@ class CatalogView(
         if (home.visibility == VISIBLE) buildHome() else { loadGrid(); fillCategories() }
     }
     fun reload() {
+        catalogPending = false
         if (gridPage.visibility == VISIBLE && adapter.count > 0) {
             restoreGrid = grid.layoutManager?.onSaveInstanceState()
             restoreCategory = categories.layoutManager?.onSaveInstanceState()
@@ -192,8 +196,12 @@ class CatalogView(
         focusAfterLoad = !nav.values.any { it.hasFocus() } && !search.hasFocus() && !order.hasFocus() && !categories.hasFocus()
         if (tab in listOf("continue", "favorites")) reload() else { refreshLibrary(); if (focusAfterLoad) { focusContent(); focusAfterLoad = false } }
     }
-    fun catalogUpdated() { handler.removeCallbacks(updateCatalog); handler.postDelayed(updateCatalog, 200) }
+    fun catalogUpdated(defer: Boolean = false) {
+        catalogPending = true; handler.removeCallbacks(updateCatalog)
+        if (!defer) handler.postDelayed(updateCatalog, 200)
+    }
     fun refreshLibrary() {
+        if (catalogPending) { catalogPending = false; reload(); return }
         if (tab in listOf("continue", "favorites")) { reload(); return }
         val current = queryEpoch
         val adapters = listOf(adapter) + homeRows.map { it.second }
