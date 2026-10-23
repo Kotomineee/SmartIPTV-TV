@@ -255,8 +255,8 @@ class CatalogView(
         if (descendantFocusability == FOCUS_BLOCK_DESCENDANTS) return false
         if (tab == "settings") return nextButton.requestFocus()
         if (home.visibility == VISIBLE) return homeRows.firstOrNull()?.first?.getChildAt(0)?.requestFocus() ?: nav[tab]?.requestFocus() ?: false
-        if (!grid.isShown) return false
-        return (0 until grid.childCount).map { grid.getChildAt(it) }.firstOrNull { it.isFocusable }?.requestFocus() == true
+        val card = if (grid.isShown) (0 until grid.childCount).map { grid.getChildAt(it) }.firstOrNull { it.isFocusable } else null
+        return card?.requestFocus() ?: if (!focusAfterLoad || count.text.toString().startsWith("0 ")) search.requestFocus() else false
     }
     override fun dispatchKeyEvent(event: android.view.KeyEvent): Boolean {
         if (event.action == android.view.KeyEvent.ACTION_DOWN) {
