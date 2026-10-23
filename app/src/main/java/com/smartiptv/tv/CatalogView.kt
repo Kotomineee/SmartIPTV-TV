@@ -192,8 +192,8 @@ class CatalogView(
         }
         render()
     }
-    fun restoreAfterPlayback() {
-        focusAfterLoad = !nav.values.any { it.hasFocus() } && !search.hasFocus() && !order.hasFocus() && !categories.hasFocus()
+    fun restoreAfterPlayback(focus: Boolean = true) {
+        focusAfterLoad = focus && !nav.values.any { it.hasFocus() } && !search.hasFocus() && !order.hasFocus() && !categories.hasFocus()
         if (tab in listOf("continue", "favorites")) reload() else { refreshLibrary(); if (focusAfterLoad) { focusContent(); focusAfterLoad = false } }
     }
     fun catalogUpdated(defer: Boolean = false) {

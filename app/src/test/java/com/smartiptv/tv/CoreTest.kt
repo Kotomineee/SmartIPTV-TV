@@ -383,6 +383,47 @@ class CoreTest {
         assertTrue(db.watchedEpisodes(account, "").isEmpty())
     }
 
+    @Test fun episodeResumeTimesAreBatchedScopedAndSurviveRestart() {
+        val first = Content("episode", "101", "Estreia", seriesId = series.id, season = 1, episode = 1)
+        val second = first.copy(id = "202", season = 2, episode = 2)
+        db.record(account, first, 754000, 2400000)
+        db.record(account, second, 3723000, 5400000)
+        db.record("other-account", first, 8000, 20000)
+        db.record(account, first.copy(id = "other", seriesId = "other-series"), 9000, 20000)
+        db.record(account, movie.copy(seriesId = series.id), 9000, 20000)
+        db.close(); db = LibraryDb(context)
+        val states = db.episodeStates(account, series.id)
+        assertEquals(setOf(first.uid, second.uid), states.keys)
+        assertEquals("Parou em 12:34", states.getValue(first.uid).resumeText)
+        assertEquals("Parou em 1:02:03", states.getValue(second.uid).resumeText)
+        assertEquals(3723000L, states.getValue(second.uid).position)
+        assertFalse(states.getValue(second.uid).watched)
+        assertTrue(db.episodeStates(account, "").isEmpty())
+        assertTrue(db.episodeStates("unknown", series.id).isEmpty())
+    }
+
+    @Test fun completedEpisodeHasNoStaleResumeTimeButReplayCanHaveBoth() {
+        val episode = Content("episode", "101", "Estreia", seriesId = series.id)
+        db.record(account, episode, 7000, 20000)
+        db.record(account, episode, 20000, 20000, true)
+        assertEquals(EpisodeState(true, 0, 20000), db.episodeStates(account, series.id)[episode.uid])
+        assertEquals("", db.episodeStates(account, series.id).getValue(episode.uid).resumeText)
+        db.record(account, episode, 5000, 20000)
+        assertEquals(EpisodeState(true, 5000, 20000), db.episodeStates(account, series.id)[episode.uid])
+        db.removeProgress(account, episode)
+        assertEquals(EpisodeState(true, 0, 0), db.episodeStates(account, series.id)[episode.uid])
+    }
+
+    @Test fun episodeWithoutKnownDurationStillShowsItsSavedTime() {
+        val episode = Content("episode", "101", "Estreia", seriesId = series.id)
+        db.toggleFavorite(account, episode)
+        assertTrue(db.episodeStates(account, series.id).isEmpty())
+        db.record(account, episode, 9000, 0)
+        assertEquals("Parou em 00:09", db.episodeStates(account, series.id).getValue(episode.uid).resumeText)
+        db.removeProgress(account, episode)
+        assertTrue(db.episodeStates(account, series.id).isEmpty())
+    }
+
     @Test fun versionTwoMigrationRecognizesPreviouslyCompletedEpisodes() {
         db.close(); context.deleteDatabase("library.db")
         val file = context.getDatabasePath("library.db"); file.parentFile!!.mkdirs()

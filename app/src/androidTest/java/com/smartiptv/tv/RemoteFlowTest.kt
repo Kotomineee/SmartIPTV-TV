@@ -218,6 +218,8 @@ class RemoteFlowTest {
         waitFor("Suspended playback did not resume") { it.playerView?.engine?.let { p -> p.playbackState == Player.STATE_READY && p.currentPosition >= position.get() - 500 } == true }
         ui { it.leavePlayer() }
         waitFor("Continue progress missing") { it.database.page(provider.account, "continue").total == 1 }
+        waitFor("Episode exit did not restore season 2") { it.details?.episodeList?.getChildAt(0)?.contentDescription?.toString()?.contains("Episódio 1:") == true && it.details!!.seriesSnapshot()?.episodes?.firstOrNull { e -> e.uid == it.currentFocus?.tag }?.season == 2 }
+        device.pressBack(); waitFor("Returned episode picker did not close") { it.details == null }
         navigate("continue"); capture("07-continuar")
 
         // Account-scoped favorites, progress and encrypted remembered login survive restart.
@@ -237,6 +239,8 @@ class RemoteFlowTest {
         ui { it.playerView!!.engine!!.seekTo(it.playerView!!.engine!!.duration - 400); it.playerView!!.engine!!.play() }
         waitFor("Autoplay did not cross seasons", 12000) { it.playerView?.item?.let { c -> c.season == 2 && c.episode == 1 } == true }
         ui { it.leavePlayer() }
+        waitFor("Autoplay exit did not select the current episode") { it.details != null && it.currentFocus?.tag == "episode:201" }
+        device.pressBack(); waitFor("Autoplay episode picker did not close") { it.details == null }
         navigate("live"); ui { it.catalogView!!.focusContent() }; device.pressDPadCenter()
         waitFor("Live detail missing") { it.details != null }
         ui { it.details!!.watch.requestFocus() }; device.pressDPadCenter()
@@ -340,7 +344,8 @@ class RemoteFlowTest {
     @Test fun completedEpisodeBadgePersistsAcrossSeasonsReplayAndRestart() {
         login()
         fun openSeries() {
-            navigate("series"); ui { it.catalogView!!.focusContent() }; device.pressDPadCenter()
+            val showing = AtomicReference(false); ui { showing.set(it.details != null) }
+            if (!showing.get()) { navigate("series"); ui { it.catalogView!!.focusContent() }; device.pressDPadCenter() }
             waitFor("Episode list not ready") { it.details?.watch?.isEnabled == true && it.details!!.episodeList.childCount > 0 }
         }
         fun firstRow(activity: MainActivity) = activity.details!!.episodeList.findViewHolderForAdapterPosition(0)?.itemView as? DetailView.EpisodeRow
@@ -392,6 +397,56 @@ class RemoteFlowTest {
         ui { firstRow(it)!!.requestFocus() }
         device.pressDPadDown()
         waitFor("Watched badge broke D-pad episode navigation") { it.details!!.episodeList.findViewHolderForAdapterPosition(1)?.itemView?.hasFocus() == true }
+        device.executeShellCommand("wm size reset")
+    }
+
+    @Test fun episodeExitRestoresSameSeasonAndEpisodeWithPersistentResumeTime() {
+        login()
+        navigate("series"); ui { it.catalogView!!.focusContent() }; device.pressDPadCenter()
+        waitFor("Resume series picker did not load") { it.details?.watch?.isEnabled == true }
+        ui { it.details!!.seasons.getChildAt(1).requestFocus() }; device.pressDPadCenter()
+        waitFor("Second season rows not ready") { it.details!!.episodeList.findViewHolderForAdapterPosition(1) != null }
+        ui { it.details!!.episodeList.findViewHolderForAdapterPosition(1)!!.itemView.requestFocus() }; device.pressDPadCenter()
+        waitFor("Season 2 episode 2 did not play") { it.playerView?.item?.uid == "episode:202" && it.playerView?.engine?.playbackState == Player.STATE_READY }
+        ui { it.playerView!!.engine!!.pause(); it.playerView!!.engine!!.seekTo(7300) }
+        waitFor("Partial episode seek did not settle") { it.playerView?.engine?.currentPosition == 7300L }
+        val requests = provider.seriesInfoRequests.get()
+        focusDescription("Voltar aos episódios"); device.pressDPadCenter()
+        fun returnedRow(activity: MainActivity): DetailView.EpisodeRow? = activity.details?.episodeList?.findViewHolderForAdapterPosition(1)?.itemView as? DetailView.EpisodeRow
+        fun expectReturn() {
+            waitFor("Player exit did not return to series 4 season 2 episode 2") {
+                it.playerView == null && it.details?.item?.id == "4" && returnedRow(it)?.tag == "episode:202" && returnedRow(it)?.hasFocus() == true && returnedRow(it)?.progress?.text?.toString() == "Parou em 00:07"
+            }
+            ui {
+                val row = returnedRow(it)!!
+                assertFalse(it.catalogView!!.grid.hasFocus())
+                assertEquals(View.GONE, row.badge.visibility)
+                assertTrue(row.contentDescription.toString().contains("Parou em 00:07"))
+                val visible = Rect(); assertTrue(row.progress.getGlobalVisibleRect(visible))
+                assertEquals(row.progress.width, visible.width()); assertEquals(row.progress.height, visible.height())
+            }
+        }
+        expectReturn()
+        assertEquals("Returning from player downloaded the episode list again", requests, provider.seriesInfoRequests.get())
+        capture("15-episode-resume-and-return-1080p")
+        device.pressDPadCenter()
+        waitFor("OK on returned episode did not resume at saved position") { it.playerView?.item?.uid == "episode:202" && it.playerView?.engine?.let { p -> p.playbackState == Player.STATE_READY && p.currentPosition >= 7000 } == true }
+        ui { it.playerView!!.engine!!.pause(); it.playerView!!.engine!!.seekTo(7300); it.playerView!!.hideControls() }
+        device.pressBack(); expectReturn()
+
+        // Closing the picker then restarting must preserve per-row progress.
+        device.pressBack(); waitFor("Picker did not return to series catalog") { it.details == null }
+        scenario.close(); scenario = ActivityScenario.launch(MainActivity::class.java)
+        waitFor("Resume time session did not restore") { it.catalogView != null }
+        navigate("continue"); ui { it.catalogView!!.focusContent() }; device.pressDPadCenter()
+        waitFor("Continue watching did not resume episode 202") { it.playerView?.item?.uid == "episode:202" && it.playerView?.engine?.playbackState == Player.STATE_READY }
+        ui { it.playerView!!.engine!!.pause(); it.playerView!!.engine!!.seekTo(7300) }
+        focusDescription("Voltar aos episódios"); device.pressDPadCenter(); expectReturn()
+        device.executeShellCommand("wm size 1280x720")
+        waitFor("720p resume picker not ready") { it.window.decorView.width == 1280 && returnedRow(it)?.progress?.let { p -> val rect = Rect(); p.getGlobalVisibleRect(rect) && p.width == rect.width() && p.height == rect.height() } == true }
+        capture("16-episode-resume-and-return-720p")
+        ui { returnedRow(it)!!.requestFocus() }; device.pressDPadDown()
+        waitFor("Resume status broke episode remote navigation") { it.currentFocus?.tag == "episode:203" }
         device.executeShellCommand("wm size reset")
     }
 }

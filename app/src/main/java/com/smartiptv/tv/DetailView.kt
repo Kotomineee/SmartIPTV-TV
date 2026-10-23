@@ -20,6 +20,7 @@ class DetailView(
     context: Context, val item: Content, private val api: XtreamApi, private val db: LibraryDb,
     private val jobs: Jobs, private val images: ArtworkLoader, backgroundView: View,
     private val close: () -> Unit, private val play: (Content, Boolean, List<Content>) -> Unit,
+    private val returnEpisode: Content? = null, private val cachedSeries: SeriesInfo? = null,
 ) : FrameLayout(context) {
     private val account = api.credentials.account
     private val panel = context.column().apply { pad(22, 18); background = shape(Palette.panel, context.dp(13).toFloat(), Color.rgb(66, 102, 83)); isClickable = true }
@@ -34,7 +35,9 @@ class DetailView(
     val seasons = SeasonFlow(context)
     val episodeList = RecyclerView(context)
     private var episodes = emptyList<Content>()
-    private var watched = emptySet<String>()
+    private var episodeStates = emptyMap<String, EpisodeState>()
+    private var seriesInfo: SeriesInfo? = null
+    private var focusEpisodeUid: String? = returnEpisode?.uid
     private var selectedEpisode: Content? = null
     private var checkpoint: Progress? = null
     private var season = 0
@@ -77,16 +80,16 @@ class DetailView(
             episodeList.layoutManager = LinearLayoutManager(context); episodeList.itemAnimator = null
             panel.addView(episodeList, LinearLayout.LayoutParams(-1, 0, 1f)); watch.isEnabled = false
         }
-        jobs.run(work = { Triple(db.isFavorite(account, item), db.checkpoint(account, item), if (series) db.watchedEpisodes(account, item.id) else emptySet()) }, done = { (active, progress, completed) ->
+        jobs.run(work = { Triple(db.isFavorite(account, item), db.checkpoint(account, item), if (series) db.episodeStates(account, item.id) else emptyMap()) }, done = { (active, progress, states) ->
             if (dismissed) return@run
             favorite.text = if (active) "Remover dos favoritos" else "Adicionar aos favoritos"
             checkpoint = progress
-            watched = completed
+            episodeStates = states
             (episodeList.adapter as? EpisodeAdapter)?.let { adapter -> episodeList.post { if (!dismissed && episodeList.adapter === adapter) adapter.notifyItemRangeChanged(0, adapter.itemCount) } }
             if (progress != null) {
                 secondary.addView(context.button(if (series) "Continuar episódio" else "Assistir do início") { play(if (series) progress.item else item, !series, episodes) }, LinearLayout.LayoutParams(-2, context.dp(40)).apply { topMargin = context.dp(8) })
                 if (!series) watch.text = "Continuar assistindo"
-                else if (episodes.isNotEmpty()) selectSeason(progress.item.season, progress.item.uid)
+                else if (returnEpisode == null && episodes.isNotEmpty()) selectSeason(progress.item.season, progress.item.uid)
             }
         })
         post { if (!dismissed) images.load(item.artwork, poster) }
@@ -97,8 +100,8 @@ class DetailView(
             Canvas(snapshot).apply { scale(width.toFloat() / backgroundView.width, height.toFloat() / backgroundView.height); backgroundView.draw(this) }
             blurJob = jobs.run(work = { blur(snapshot) }, done = { bitmap -> if (!dismissed) { blurred = bitmap; backdrop.setImageBitmap(bitmap) } })
         }
-        load()
-        post { watch.requestFocus() }
+        if (series && cachedSeries != null) showSeries(cachedSeries) else load()
+        if (returnEpisode == null) post { if (!dismissed) watch.requestFocus() }
     }
 
     private fun selected(): Content? = if (item.kind == "series") selectedEpisode else item
@@ -111,26 +114,29 @@ class DetailView(
         if (item.kind == "live") { plot.text = "Transmissão ao vivo do seu provedor."; feedback.visibility = GONE; return }
         feedback.visibility = if (item.kind == "series") VISIBLE else GONE
         feedback.text = "Carregando temporadas e episódios…"
-        if (item.kind == "series") future = jobs.run(network = true, work = { api.seriesInfo(item) }, done = { result ->
-            if (dismissed) return@run
-            episodes = result.episodes
-            plot.text = result.plot.ifBlank { "Sinopse não informada pelo provedor." }
-            val values = episodes.map { it.season }.distinct().sorted()
-            caption.text = listOf(item.year, "${values.size} temporada${if (values.size == 1) "" else "s"}").filter { it.isNotBlank() }.joinToString(" · ")
-            seasons.removeAllViews()
-            values.forEach { number ->
-                val button = context.button("T$number") { selectSeason(number) }.apply { contentDescription = "Temporada $number"; tag = number; minHeight = context.dp(32); minimumHeight = context.dp(32); pad(11, 5) }
-                seasons.addView(button, ViewGroup.LayoutParams(-2, context.dp(32)))
-            }
-            watch.isEnabled = episodes.isNotEmpty()
-            feedback.visibility = if (episodes.isEmpty()) VISIBLE else GONE
-            feedback.text = if (episodes.isEmpty()) "O provedor ainda não disponibilizou episódios para esta série." else ""
-            if (values.isNotEmpty()) selectSeason(checkpoint?.item?.season?.takeIf { it in values } ?: values.first(), checkpoint?.item?.uid)
-            if (findFocus() == null || findFocus() === this) watch.requestFocus()
-        }, failed = ::failed)
+        if (item.kind == "series") future = jobs.run(network = true, work = { api.seriesInfo(item) }, done = ::showSeries, failed = ::failed)
         else future = jobs.run(network = true, work = { api.movieInfo(item) }, done = { if (!dismissed) plot.text = it.ifBlank { "Este título não possui sinopse informada pelo provedor." } }, failed = {
             if (!dismissed) plot.text = item.plot.ifBlank { "Informações adicionais indisponíveis. Você pode tentar reproduzir o conteúdo." }
         })
+    }
+    fun seriesSnapshot(): SeriesInfo? = seriesInfo
+    private fun showSeries(result: SeriesInfo) {
+        if (dismissed) return
+        seriesInfo = result; episodes = result.episodes
+        plot.text = result.plot.ifBlank { "Sinopse não informada pelo provedor." }
+        val values = episodes.map { it.season }.distinct().sorted()
+        caption.text = listOf(item.year, "${values.size} temporada${if (values.size == 1) "" else "s"}").filter { it.isNotBlank() }.joinToString(" · ")
+        seasons.removeAllViews()
+        values.forEach { number ->
+            val button = context.button("T$number") { selectSeason(number) }.apply { contentDescription = "Temporada $number"; tag = number; minHeight = context.dp(32); minimumHeight = context.dp(32); pad(11, 5) }
+            seasons.addView(button, ViewGroup.LayoutParams(-2, context.dp(32)))
+        }
+        watch.isEnabled = episodes.isNotEmpty()
+        feedback.visibility = if (episodes.isEmpty()) VISIBLE else GONE
+        feedback.text = if (episodes.isEmpty()) "O provedor ainda não disponibilizou episódios para esta série." else ""
+        val target = returnEpisode ?: checkpoint?.item
+        if (values.isNotEmpty()) selectSeason(target?.season?.takeIf { it in values } ?: values.first(), target?.uid)
+        if (returnEpisode == null && (findFocus() == null || findFocus() === this)) watch.requestFocus()
     }
     private fun failed(message: String) { if (!dismissed) { feedback.text = message; feedback.visibility = VISIBLE; retry.visibility = VISIBLE; retry.requestFocus() } }
     private fun selectSeason(number: Int, selectedUid: String? = null) {
@@ -176,21 +182,32 @@ class DetailView(
         inner class Holder(val row: EpisodeRow) : RecyclerView.ViewHolder(row)
         override fun getItemCount() = list.size
         override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): Holder = Holder(EpisodeRow(context).apply {
-            layoutParams = RecyclerView.LayoutParams(-1, context.dp(43)).apply { bottomMargin = context.dp(4) }
+            layoutParams = RecyclerView.LayoutParams(-1, context.dp(52)).apply { bottomMargin = context.dp(4) }
         })
         override fun onBindViewHolder(holder: Holder, position: Int) {
             val episode = list[position]
-            val completed = episode.uid in watched
+            val state = episodeStates[episode.uid]
+            val completed = state?.watched == true
+            val resume = state?.resumeText.orEmpty()
             holder.row.title.text = "${episode.episode}     ${episode.name}"
+            holder.row.progress.text = resume
+            holder.row.progress.visibility = if (resume.isNotEmpty()) VISIBLE else GONE
             holder.row.badge.visibility = if (completed) VISIBLE else GONE
-            holder.row.contentDescription = "Episódio ${episode.episode}: ${episode.name}" + if (completed) ", Assistido" else ""
+            holder.row.tag = episode.uid
+            holder.row.contentDescription = "Episódio ${episode.episode}: ${episode.name}" + (if (completed) ", Assistido" else "") + (if (resume.isNotEmpty()) ", $resume" else "")
             holder.row.setOnFocusChangeListener { _, focused -> if (focused) selectedEpisode = episode }
             holder.row.setOnClickListener { play(episode, false, episodes) }
+            if (focusEpisodeUid == episode.uid) holder.row.post {
+                if (!dismissed && focusEpisodeUid == episode.uid && holder.row.tag == episode.uid && holder.row.isAttachedToWindow) {
+                    focusEpisodeUid = null; holder.row.requestFocus()
+                }
+            }
         }
     }
 
     class EpisodeRow(context: Context) : FrameLayout(context) {
         val title = context.text("", 12f).apply { maxLines = 2; ellipsize = android.text.TextUtils.TruncateAt.END }
+        val progress = context.text("", 10f, Palette.muted).apply { visibility = GONE; maxLines = 1 }
         val badge = context.text("Assistido", 10f, Palette.green, true).apply {
             pad(8, 4); background = shape(Palette.selected, context.dp(10).toFloat(), width = 0)
             setCompoundDrawablesWithIntrinsicBounds(Glyph("check", Palette.green, context.dp(13)), null, null, null)
@@ -199,7 +216,8 @@ class DetailView(
         init {
             isFocusable = true; isFocusableInTouchMode = true; background = context.focusBackground(); pad(13, 5)
             val line = context.row()
-            line.addView(title, LinearLayout.LayoutParams(0, -2, 1f))
+            val labels = context.column().apply { addView(title); addView(progress) }
+            line.addView(labels, LinearLayout.LayoutParams(0, -2, 1f))
             line.addView(badge, LinearLayout.LayoutParams(-2, -2).apply { leftMargin = context.dp(10) })
             addView(line, LayoutParams(-1, -1))
         }

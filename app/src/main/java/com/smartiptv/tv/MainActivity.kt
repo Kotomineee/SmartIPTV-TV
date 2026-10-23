@@ -23,6 +23,9 @@ class MainActivity : Activity() {
     var catalogView: CatalogView? = null; private set
     var details: DetailView? = null; private set
     var playerView: TvPlayer? = null; private set
+    private var playbackSeries: Content? = null
+    private var playbackSeriesInfo: SeriesInfo? = null
+    private var playbackCatalogFocus: View? = null
     private var focusedBeforeDetails: View? = null
     private var catalogJob: Future<*>? = null
     private var accountJob: Future<*>? = null
@@ -118,18 +121,22 @@ class MainActivity : Activity() {
             val token = generation
             val request = contentRequest
             val series = Content("series", item.seriesId, item.seriesName, item.categories, item.artwork, year = item.year)
-            jobs.run(network = true, work = { client.seriesInfo(series) }, done = { if (token == generation && request == contentRequest && playerView == null) { pendingEpisode = false; catalogView?.message(""); play(item, false, it.episodes) } }, failed = { if (token == generation && request == contentRequest && playerView == null) { pendingEpisode = false; catalogView?.message(""); play(item, false, emptyList()); toast("A lista dos próximos episódios está indisponível.") } })
+            jobs.run(network = true, work = { client.seriesInfo(series) }, done = { if (token == generation && request == contentRequest && playerView == null) { pendingEpisode = false; catalogView?.message(""); play(item, false, it.episodes, series, it) } }, failed = { if (token == generation && request == contentRequest && playerView == null) { pendingEpisode = false; catalogView?.message(""); play(item, false, emptyList(), series); toast("A lista dos próximos episódios está indisponível.") } })
             return
         }
+        showDetails(item)
+    }
+    private fun showDetails(item: Content, returnEpisode: Content? = null, cachedSeries: SeriesInfo? = null) {
+        val client = api ?: return
         closeDetails()
         val catalog = catalogView ?: return
         focusedBeforeDetails = currentFocus
-        val detail = DetailView(this, item, client, database, jobs, images, catalog, ::closeDetails, ::play)
+        val detail = DetailView(this, item, client, database, jobs, images, catalog, ::closeDetails, { content, restart, episodes -> play(content, restart, episodes) }, returnEpisode, cachedSeries)
         details = detail
         catalog.descendantFocusability = ViewGroup.FOCUS_BLOCK_DESCENDANTS
         catalog.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
         root.addView(detail, FrameLayout.LayoutParams(-1, -1))
-        detail.post { if (details === detail) detail.watch.requestFocus() }
+        if (returnEpisode == null) detail.post { if (details === detail) detail.watch.requestFocus() }
     }
     private fun cancelPendingContent() {
         contentRequest++
@@ -160,8 +167,12 @@ class MainActivity : Activity() {
             dialog.show(); dialog.window?.setBackgroundDrawable(shape(Palette.panel, dp(12).toFloat()))
         })
     }
-    private fun play(item: Content, restart: Boolean, episodes: List<Content>) {
+    private fun play(item: Content, restart: Boolean, episodes: List<Content>, series: Content? = null, seriesInfo: SeriesInfo? = null) {
         val client = api ?: return
+        playbackSeries = if (item.kind == "episode" && item.seriesId.isNotBlank()) series ?: details?.item?.takeIf { it.kind == "series" && it.id == item.seriesId }
+            ?: Content("series", item.seriesId, item.seriesName.ifBlank { item.name }, item.categories, item.artwork, year = item.year, rating = item.rating) else null
+        playbackSeriesInfo = if (playbackSeries != null) seriesInfo ?: details?.seriesSnapshot() ?: episodes.takeIf { it.isNotEmpty() }?.let { SeriesInfo(it, playbackSeries!!.plot) } else null
+        playbackCatalogFocus = focusedBeforeDetails ?: currentFocus
         closeDetails()
         playerView?.shutdown(); playerView?.let(root::removeView)
         catalogView?.releasePosters(); catalogView?.visibility = View.GONE
@@ -171,16 +182,29 @@ class MainActivity : Activity() {
     }
     fun leavePlayer() {
         val current = playerView ?: return
+        val episode = current.item.takeIf { it.kind == "episode" }
+        val series = playbackSeries; val seriesInfo = playbackSeriesInfo
+        val catalogFocus = playbackCatalogFocus
+        playbackSeries = null; playbackSeriesInfo = null; playbackCatalogFocus = null
+        val token = generation; val request = contentRequest; val screen = catalogView
         current.shutdown(); root.removeView(current); playerView = null
         catalogView?.visibility = View.VISIBLE
         catalogView?.restorePosters()
-        jobs.afterWrites { catalogView?.restoreAfterPlayback() }
+        jobs.afterWrites {
+            if (token == generation && request == contentRequest && playerView == null && details == null && catalogView === screen) {
+                screen?.restoreAfterPlayback(focus = episode == null || series == null)
+                if (episode != null && series != null) {
+                    showDetails(series, episode, seriesInfo)
+                    focusedBeforeDetails = catalogFocus?.takeIf { it.isAttachedToWindow }
+                }
+            }
+        }
         immersive(); refreshAccount()
     }
     private fun logout() {
         cancelPendingContent()
         ++generation; handler.removeCallbacks(accountPoll)
-        playerView?.shutdown(); playerView = null; closeDetails()
+        playerView?.shutdown(); playerView = null; playbackSeries = null; playbackSeriesInfo = null; playbackCatalogFocus = null; closeDetails()
         catalogJob?.cancel(true); catalogJob = null; accountJob?.cancel(true); accountJob = null
         api?.cancel(); api = null; vault.clear(); images.switchScreen(); showLogin()
     }
@@ -210,7 +234,7 @@ class MainActivity : Activity() {
         if (level >= TRIM_MEMORY_RUNNING_LOW) images.switchScreen()
     }
     override fun onDestroy() {
-        playerView?.shutdown(); playerView = null; details?.dismiss(); details = null
+        playerView?.shutdown(); playerView = null; playbackSeries = null; playbackSeriesInfo = null; playbackCatalogFocus = null; details?.dismiss(); details = null
         generation++; handler.removeCallbacksAndMessages(null); api?.cancel(); images.close()
         jobs.close { database.close() }; super.onDestroy()
     }

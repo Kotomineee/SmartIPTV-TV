@@ -213,6 +213,17 @@ class LibraryDb(context: Context) : SQLiteOpenHelper(context, "library.db", null
             buildSet { while (cursor.moveToNext()) add(cursor.getString(0)) }
         }
     }
+    fun episodeStates(account: String, seriesId: String): Map<String, EpisodeState> {
+        if (seriesId.isBlank()) return emptyMap()
+        return readableDatabase.rawQuery("SELECT uid,watched,position,duration,finished FROM library WHERE account=? AND series_id=? AND uid LIKE 'episode:%' AND (watched=1 OR (finished=0 AND position>=1000))", arrayOf(account, seriesId)).use { cursor ->
+            buildMap {
+                while (cursor.moveToNext()) {
+                    val position = if (cursor.getInt(4) == 0) cursor.getLong(2).coerceAtLeast(0) else 0L
+                    put(cursor.getString(0), EpisodeState(cursor.getInt(1) == 1, position, cursor.getLong(3).coerceAtLeast(0)))
+                }
+            }
+        }
+    }
     var autoNext: Boolean
         get() = nextEpisode
         set(value) { nextEpisode = value; preferences.edit().putBoolean("auto_next", value).apply() }

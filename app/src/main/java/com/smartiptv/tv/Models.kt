@@ -82,6 +82,9 @@ fun JSONObject.text(key: String, fallback: String = ""): String = if (isNull(key
 data class Category(val id: String, val name: String)
 data class Account(val expiration: Long?, val active: String, val maximum: String, val status: String)
 data class Progress(val item: Content, val position: Long, val duration: Long, val finished: Boolean, val updated: Long)
+data class EpisodeState(val watched: Boolean, val position: Long, val duration: Long) {
+    val resumeText: String get() = if (position >= 1000) "Parou em ${stamp(position)}" else ""
+}
 data class SeriesInfo(val episodes: List<Content>, val plot: String)
 data class Page(val items: List<Content>, val total: Int)
 

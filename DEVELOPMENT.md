@@ -47,11 +47,17 @@ autoplay toggles, repeated navigation/details, memory trimming and warm startup.
 
 Database version 3 preserves completed episode history independently from the
 latest resume position. Existing completed episodes are migrated to this history.
-The episode picker loads watched IDs with one indexed query per series on a
-worker; row binding and changing seasons never query SQLite. Completed rows show
+The episode picker loads watched flags and saved resume times with one indexed
+query per series on a worker; row binding and changing seasons never query SQLite. Completed rows show
 a green check and "Assistido" badge. Replaying or removing a resume entry does
 not clear the watched badge. Tests cover completion through real playback,
 season switching, replay, restart, account isolation, migration and 720p layout.
+Partial episodes show "Parou em mm:ss" (or h:mm:ss) under the episode title.
+Exiting episode playback waits for pending progress writes and restores the same
+series, current season and focused episode, including after autoplay and playback
+started from Continue Watching. The loaded series metadata is reused on return.
+Movie/live exits still return to the catalog. UI tests cover both exit controls,
+resuming with OK, persistent progress, catalog Back navigation and 720p/1080p.
 
 Publishing is performed manually through Kotomineee's authenticated account,
 with a version title and assets only. GitHub Actions does not publish releases.
