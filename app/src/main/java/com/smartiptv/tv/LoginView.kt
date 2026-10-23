@@ -74,13 +74,16 @@ class LoginView(context: Context, vault: SessionVault, private val login: (Crede
         server.nextFocusDownId = username.id; username.nextFocusDownId = password.id
         password.nextFocusDownId = remember.id; password.nextFocusRightId = reveal.id; reveal.nextFocusLeftId = password.id
         remember.nextFocusDownId = submit.id; submit.nextFocusUpId = remember.id
-        addOnLayoutChangeListener { _, _, _, right, _, _, _, _, _ ->
-            val wide = right >= context.dp(800)
-            hero.visibility = if (wide) VISIBLE else GONE
-            (scroll.layoutParams as LinearLayout.LayoutParams).apply {
-                width = if (wide) context.dp(365) else minOf(context.dp(410), width.coerceAtLeast(context.dp(320)))
-                if (!wide) { body.gravity = Gravity.CENTER } else body.gravity = Gravity.CENTER_VERTICAL
-            }.also { scroll.layoutParams = it }
+        addOnLayoutChangeListener { _, left, _, right, _, _, _, _, _ ->
+            val wide = right - left >= context.dp(800)
+            val visibility = if (wide) VISIBLE else GONE
+            if (hero.visibility != visibility) hero.visibility = visibility
+            val gravity = if (wide) Gravity.CENTER_VERTICAL else Gravity.CENTER
+            if (body.gravity != gravity) body.gravity = gravity
+            val desired = minOf(context.dp(if (wide) 365 else 410), body.width.coerceAtLeast(1))
+            if (scroll.layoutParams.width != desired) {
+                scroll.layoutParams = scroll.layoutParams.apply { width = desired }
+            }
         }
         server.requestFocus()
     }
