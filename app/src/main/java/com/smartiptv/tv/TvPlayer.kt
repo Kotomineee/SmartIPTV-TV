@@ -81,7 +81,7 @@ class TvPlayer(
         setBackgroundColor(Color.BLACK); isFocusable = true; isFocusableInTouchMode = true
         video.isFocusable = false
         addView(video, LayoutParams(-1, -1))
-        header.addView(iconButton("back", if (initial.kind == "episode") "Voltar aos episódios" else "Voltar ao catálogo", exit), LinearLayout.LayoutParams(context.dp(40), context.dp(40)))
+        header.addView(iconButton("back", when (initial.kind) { "episode" -> "Voltar aos episódios"; "movie" -> "Voltar ao filme"; else -> "Voltar ao catálogo" }, exit), LinearLayout.LayoutParams(context.dp(40), context.dp(40)))
         header.addView(title, LinearLayout.LayoutParams(0, -2, 1f).apply { leftMargin = context.dp(8) })
         addView(header, LayoutParams(-1, context.dp(60), Gravity.TOP))
         footer.addView(timeline, LinearLayout.LayoutParams(-1, context.dp(31)))

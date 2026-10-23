@@ -21,6 +21,7 @@ class DetailView(
     private val jobs: Jobs, private val images: ArtworkLoader, backgroundView: View,
     private val close: () -> Unit, private val play: (Content, Boolean, List<Content>) -> Unit,
     private val returnEpisode: Content? = null, private val cachedSeries: SeriesInfo? = null,
+    private val cachedMoviePlot: String? = null,
 ) : FrameLayout(context) {
     private val account = api.credentials.account
     private val panel = context.column().apply { pad(22, 18); background = shape(Palette.panel, context.dp(13).toFloat(), Color.rgb(66, 102, 83)); isClickable = true }
@@ -31,6 +32,8 @@ class DetailView(
     val favorite = context.button("Adicionar aos favoritos", symbol = "heart") { toggleFavorite() }
     val watch = context.button(if (item.kind == "series") "Assistir episódio" else "Assistir agora", true, "play") { selected()?.let { play(it, false, episodes) } }
     private val feedback = context.text("", 11f, Palette.muted)
+    val movieResume = context.text("", 11f, Palette.green).apply { visibility = GONE }
+    private var moviePlot: String? = null
     private val retry = context.button("Carregar novamente") { load() }
     val seasons = SeasonFlow(context)
     val episodeList = RecyclerView(context)
@@ -66,7 +69,9 @@ class DetailView(
         info.addView(heading); info.gap(8)
         info.addView(caption); info.gap(10)
         plot.maxLines = if (series) 3 else 5; plot.ellipsize = android.text.TextUtils.TruncateAt.END
-        info.addView(plot); info.gap(11)
+        info.addView(plot)
+        info.addView(movieResume, LinearLayout.LayoutParams(-1, -2).apply { topMargin = context.dp(7) })
+        info.gap(11)
         val actions = context.row()
         actions.addView(watch, LinearLayout.LayoutParams(-2, context.dp(40)).apply { rightMargin = context.dp(8) })
         actions.addView(favorite, LinearLayout.LayoutParams(-2, context.dp(40)))
@@ -84,6 +89,10 @@ class DetailView(
             if (dismissed) return@run
             favorite.text = if (active) "Remover dos favoritos" else "Adicionar aos favoritos"
             checkpoint = progress
+            if (item.kind == "movie") {
+                movieResume.text = progress?.let { "Parou em ${stamp(it.position)}" }.orEmpty()
+                movieResume.visibility = if (progress != null) VISIBLE else GONE
+            }
             episodeStates = states
             (episodeList.adapter as? EpisodeAdapter)?.let { adapter -> episodeList.post { if (!dismissed && episodeList.adapter === adapter) adapter.notifyItemRangeChanged(0, adapter.itemCount) } }
             if (progress != null) {
@@ -100,7 +109,9 @@ class DetailView(
             Canvas(snapshot).apply { scale(width.toFloat() / backgroundView.width, height.toFloat() / backgroundView.height); backgroundView.draw(this) }
             blurJob = jobs.run(work = { blur(snapshot) }, done = { bitmap -> if (!dismissed) { blurred = bitmap; backdrop.setImageBitmap(bitmap) } })
         }
-        if (series && cachedSeries != null) showSeries(cachedSeries) else load()
+        if (series && cachedSeries != null) showSeries(cachedSeries)
+        else if (item.kind == "movie" && cachedMoviePlot != null) showMovie(cachedMoviePlot)
+        else load()
         if (returnEpisode == null) post { if (!dismissed) watch.requestFocus() }
     }
 
@@ -115,9 +126,11 @@ class DetailView(
         feedback.visibility = if (item.kind == "series") VISIBLE else GONE
         feedback.text = "Carregando temporadas e episódios…"
         if (item.kind == "series") future = jobs.run(network = true, work = { api.seriesInfo(item) }, done = ::showSeries, failed = ::failed)
-        else future = jobs.run(network = true, work = { api.movieInfo(item) }, done = { if (!dismissed) plot.text = it.ifBlank { "Este título não possui sinopse informada pelo provedor." } }, failed = {
-            if (!dismissed) plot.text = item.plot.ifBlank { "Informações adicionais indisponíveis. Você pode tentar reproduzir o conteúdo." }
-        })
+        else future = jobs.run(network = true, work = { api.movieInfo(item) }, done = ::showMovie, failed = { showMovie(item.plot) })
+    }
+    fun moviePlotSnapshot(): String? = moviePlot
+    private fun showMovie(value: String) {
+        if (!dismissed) { moviePlot = value; plot.text = value.ifBlank { "Este título não possui sinopse informada pelo provedor." } }
     }
     fun seriesSnapshot(): SeriesInfo? = seriesInfo
     private fun showSeries(result: SeriesInfo) {

@@ -101,15 +101,17 @@ class CatalogAdapter(
             if (tile.layoutParams.height != height) tile.layoutParams = tile.layoutParams.apply { this.height = height }
             images.clear(tile.poster)
             tile.title.text = value?.item?.name ?: "Carregando…"
-            tile.description.text = value?.item?.let { if (it.kind == "episode") "T${it.season} · E${it.episode}" else it.year.ifEmpty { if (it.kind == "live") "AO VIVO" else "" } } ?: ""
             indicators(value)
-            tile.contentDescription = value?.item?.displayName ?: "Carregando conteúdo"
             tile.post { loadArtwork() }
         }
         fun indicators(value: CardData?) {
             card = value
             tile.heart.visibility = if (value?.favorite == true) View.VISIBLE else View.GONE
             val progress = value?.progress
+            val resume = if (value?.item?.kind == "movie" && progress != null) "Parou em ${stamp(progress.position)}" else ""
+            tile.description.text = resume.ifEmpty { value?.item?.let { if (it.kind == "episode") "T${it.season} · E${it.episode}" else it.year.ifEmpty { if (it.kind == "live") "AO VIVO" else "" } }.orEmpty() }
+            tile.description.setTextColor(if (resume.isNotEmpty()) Palette.green else Palette.muted)
+            tile.contentDescription = (value?.item?.displayName ?: "Carregando conteúdo") + if (resume.isNotEmpty()) ", $resume" else ""
             tile.progress.visibility = if (progress != null && progress.duration > 0) View.VISIBLE else View.GONE
             tile.progress.progress = if (progress != null && progress.duration > 0) (progress.position * 1000 / progress.duration).toInt() else 0
         }

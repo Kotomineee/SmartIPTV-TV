@@ -13,6 +13,7 @@ import android.widget.ScrollView
 import android.widget.TextView
 import androidx.core.widget.addTextChangedListener
 import androidx.recyclerview.widget.GridLayoutManager
+import androidx.recyclerview.widget.ConcatAdapter
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import java.text.SimpleDateFormat
@@ -52,7 +53,7 @@ class CatalogView(
     private val body = FrameLayout(context)
     val search = context.input("Buscar no catálogo").apply { hint = "Buscar no catálogo…"; textSize = 12f; imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH }
     val count = context.text("", 11f, Palette.muted)
-    val order = context.button("Mais recentes") { alphabetical = !alphabetical; updateOrder(); loadGrid(); fillCategories() }
+    val order = context.button("Mais recentes") { alphabetical = !alphabetical; updateOrder(); if (tab == "favorites") loadFavorites() else { loadGrid(); fillCategories() } }
     private val gridPage = context.column()
     private val categoryRow = LinearLayout(context).apply { orientation = HORIZONTAL }
     private val categories = RecyclerView(context)
@@ -60,6 +61,8 @@ class CatalogView(
     private val empty = context.text("Seu catálogo aparecerá aqui", 17f, Palette.muted).apply { gravity = Gravity.CENTER; pad(20) }
     private val results = FrameLayout(context)
     private var adapter: CatalogAdapter
+    private data class FavoriteSection(val kind: String, val header: FavoriteHeaderAdapter, val cards: CatalogAdapter)
+    private val favoriteSections = mutableListOf<FavoriteSection>()
     private val home = ScrollView(context).apply { isFillViewport = false }
     private val homeBody = context.column()
     private val homeRows = mutableListOf<Pair<RecyclerView, CatalogAdapter>>()
@@ -111,17 +114,31 @@ class CatalogView(
         categoryRow.addView(categories, LayoutParams(context.dp(151), -1).apply { rightMargin = context.dp(12) })
         categoryRow.addView(results, LayoutParams(0, -1, 1f))
         results.addView(grid, FrameLayout.LayoutParams(-1, -1)); results.addView(empty, FrameLayout.LayoutParams(-1, -1))
-        grid.layoutManager = GridLayoutManager(context, 4)
+        grid.layoutManager = GridLayoutManager(context, 4).apply {
+            spanSizeLookup = object : GridLayoutManager.SpanSizeLookup() {
+                override fun getSpanSize(position: Int): Int {
+                    if (tab == "favorites") {
+                        var offset = 0
+                        for (section in favoriteSections) {
+                            if (position == offset) return spanCount
+                            offset += 1 + section.cards.itemCount
+                        }
+                    }
+                    return 1
+                }
+            }
+        }
         grid.itemAnimator = null; grid.setHasFixedSize(true); grid.clipToPadding = false; grid.setItemViewCacheSize(2)
         grid.setPadding(context.dp(2), context.dp(2), context.dp(2), context.dp(8))
         adapter = CatalogAdapter(images, open, options, ::loadPage)
         grid.adapter = adapter
-        grid.addOnScrollListener(object : RecyclerView.OnScrollListener() { override fun onScrolled(recyclerView: RecyclerView, dx: Int, dy: Int) { adapter.reloadPosters() } })
+        grid.addOnScrollListener(object : RecyclerView.OnScrollListener() { override fun onScrolled(recyclerView: RecyclerView, dx: Int, dy: Int) { adapter.reloadPosters(); favoriteSections.forEach { it.cards.reloadPosters() } } })
         grid.addOnLayoutChangeListener { _, left, _, right, _, _, _, _, _ ->
             val manager = grid.layoutManager as GridLayoutManager
             val columns = ((right - left) / context.dp(128)).coerceIn(2, 8)
             if (manager.spanCount != columns) manager.spanCount = columns
             adapter.reloadPosters()
+            favoriteSections.forEach { it.cards.reloadPosters() }
         }
         body.addView(settings, FrameLayout.LayoutParams(-1, -1)); buildSettings()
         search.addTextChangedListener {
@@ -155,6 +172,8 @@ class CatalogView(
             restoreGrid = null; restoreCategory = null; restoreHomeY = 0; restoreHomeRows = emptyList()
             queryEpoch++; images.switchScreen(); adapter.reset()
             homeRows.forEach { it.first.adapter = null; it.second.reset() }; homeRows.clear(); homeBody.removeAllViews()
+            favoriteSections.forEach { it.cards.reset() }; favoriteSections.clear()
+            grid.adapter = adapter
             grid.recycledViewPool.clear(); category = ""
         }
         tab = next
@@ -178,11 +197,14 @@ class CatalogView(
         settings.visibility = if (tab == "settings") VISIBLE else GONE
         gridPage.visibility = if (home.visibility != VISIBLE && tab != "settings") VISIBLE else GONE
         if (tab == "settings") { cancelQueries(); updateAutoNext(); return }
-        if (home.visibility == VISIBLE) buildHome() else { loadGrid(); fillCategories() }
+        if (home.visibility == VISIBLE) buildHome()
+        else if (tab == "favorites") { categories.visibility = GONE; loadFavorites() }
+        else { loadGrid(); fillCategories() }
     }
     fun reload() {
         catalogPending = false
-        if (gridPage.visibility == VISIBLE && adapter.count > 0) {
+        if (tab == "favorites" && grid.hasFocus() && descendantFocusability != FOCUS_BLOCK_DESCENDANTS) focusAfterLoad = true
+        if (gridPage.visibility == VISIBLE && (grid.adapter?.itemCount ?: 0) > 0) {
             restoreGrid = grid.layoutManager?.onSaveInstanceState()
             restoreCategory = categories.layoutManager?.onSaveInstanceState()
         }
@@ -220,11 +242,11 @@ class CatalogView(
         super.onDetachedFromWindow()
     }
     fun releasePosters() { images.switchScreen() }
-    fun restorePosters() { adapter.reloadPosters(); homeRows.forEach { it.second.reloadPosters() } }
+    fun restorePosters() { adapter.reloadPosters(); homeRows.forEach { it.second.reloadPosters() }; favoriteSections.forEach { it.cards.reloadPosters() } }
     fun focusContent() {
         if (tab == "settings") { nextButton.requestFocus(); return }
         if (home.visibility == VISIBLE) homeRows.firstOrNull()?.first?.getChildAt(0)?.requestFocus() ?: nav[tab]?.requestFocus()
-        else grid.getChildAt(0)?.requestFocus() ?: search.requestFocus()
+        else (0 until grid.childCount).map { grid.getChildAt(it) }.firstOrNull { it.isFocusable }?.requestFocus() ?: search.requestFocus()
     }
     override fun dispatchKeyEvent(event: android.view.KeyEvent): Boolean {
         if (event.action == android.view.KeyEvent.ACTION_DOWN) {
@@ -232,8 +254,8 @@ class CatalogView(
             if (event.keyCode == android.view.KeyEvent.KEYCODE_DPAD_RIGHT && nav.values.any { it.hasFocus() }) { focusContent(); return true }
             if (event.keyCode == android.view.KeyEvent.KEYCODE_DPAD_LEFT && grid.hasFocus()) {
                 val holder = grid.findContainingViewHolder(grid.findFocus() ?: grid)
-                val columns = (grid.layoutManager as GridLayoutManager).spanCount
-                if (holder != null && holder.bindingAdapterPosition % columns == 0) {
+                val manager = grid.layoutManager as GridLayoutManager
+                if (holder != null && manager.spanSizeLookup.getSpanIndex(holder.absoluteAdapterPosition.coerceAtLeast(0), manager.spanCount) == 0) {
                     if (categories.visibility == VISIBLE) categories.getChildAt(0)?.requestFocus() ?: nav[tab]?.requestFocus() else nav[tab]?.requestFocus()
                     return true
                 }
@@ -250,6 +272,7 @@ class CatalogView(
     }
     private fun searchAll(term: String, alpha: Boolean, offset: Int, limit: Int): Page = db.searchAll(accountKey, term, alpha, offset, limit)
     private fun loadGrid() {
+        if (grid.adapter !== adapter) grid.adapter = adapter
         cancelQueries()
         queryEpoch++
         val current = queryEpoch
@@ -260,8 +283,36 @@ class CatalogView(
             restoreGrid?.let { grid.layoutManager?.onRestoreInstanceState(it) }; restoreGrid = null
             empty.text = if (search.text.isNotBlank()) "Nenhum resultado encontrado" else if (tab == "continue") "Nenhum conteúdo em andamento" else if (tab == "favorites") "Seus favoritos ficam aqui" else "Nenhum conteúdo disponível"
             empty.visibility = if (page.total == 0) VISIBLE else GONE; grid.visibility = if (page.total == 0) INVISIBLE else VISIBLE
-            if (focusAfterLoad) grid.post { if (grid.childCount > 0) { focusContent(); focusAfterLoad = false } }
+            if (focusAfterLoad) grid.post { if (grid.childCount > 0 && descendantFocusability != FOCUS_BLOCK_DESCENDANTS) { focusContent(); focusAfterLoad = false } }
         }
+    }
+    private fun loadFavorites() {
+        cancelQueries(); queryEpoch++
+        val current = queryEpoch; val term = search.text.toString(); val alpha = alphabetical
+        count.text = "Carregando…"; empty.text = "Carregando favoritos…"; empty.visibility = VISIBLE; grid.visibility = INVISIBLE
+        query(work = {
+            listOf("movie" to "Filmes", "series" to "Séries", "live" to "TV ao vivo").map { (kind, title) ->
+                Triple(kind, title, cards(db.page(accountKey, "favorites", search = term, alphabetical = alpha, limit = CatalogAdapter.PAGE_SIZE, favoriteKind = kind)))
+            }
+        }, done = { sections ->
+            if (current != queryEpoch || tab != "favorites") return@query
+            favoriteSections.forEach { it.cards.reset() }; favoriteSections.clear()
+            sections.filter { it.third.total > 0 }.forEach { (kind, title, first) ->
+                val sectionCards = CatalogAdapter(images, open, options, { offset, limit, done ->
+                    query(work = { cards(db.page(accountKey, "favorites", search = term, alphabetical = alpha, offset = offset, limit = limit, favoriteKind = kind)) }, done = { if (current == queryEpoch && tab == "favorites") done(it) })
+                })
+                sectionCards.reset(first, kind == "live")
+                favoriteSections += FavoriteSection(kind, FavoriteHeaderAdapter(title, first.total), sectionCards)
+            }
+            val config = ConcatAdapter.Config.Builder().setStableIdMode(ConcatAdapter.Config.StableIdMode.ISOLATED_STABLE_IDS).build()
+            grid.adapter = ConcatAdapter(config, *favoriteSections.flatMap { listOf(it.header, it.cards) }.toTypedArray())
+            restoreGrid?.let { grid.layoutManager?.onRestoreInstanceState(it) }; restoreGrid = null
+            val total = sections.sumOf { it.third.total }
+            count.text = "$total conteúdos"
+            empty.text = if (term.isNotBlank()) "Nenhum resultado encontrado" else "Seus favoritos ficam aqui"
+            empty.visibility = if (total == 0) VISIBLE else GONE; grid.visibility = if (total == 0) INVISIBLE else VISIBLE
+            if (focusAfterLoad) grid.post { if (current == queryEpoch && descendantFocusability != FOCUS_BLOCK_DESCENDANTS) { focusContent(); focusAfterLoad = false } }
+        }, failed = { if (current == queryEpoch) { empty.text = "Não foi possível carregar os favoritos. Tente novamente."; message(it, true) } })
     }
     private fun fillCategories() {
         val enabled = tab in listOf("live", "movie", "series")
@@ -317,6 +368,23 @@ class CatalogView(
         val scroll = ScrollView(context); scroll.addView(card); settings.addView(scroll, LayoutParams(-1, -1))
     }
     private fun updateAutoNext() { nextButton.text = "Reproduzir próximo episódio: ${if (db.autoNext) "Ligado" else "Desligado"}" }
+
+    private class FavoriteHeaderAdapter(private val title: String, private val count: Int) : RecyclerView.Adapter<FavoriteHeaderAdapter.Holder>() {
+        init { setHasStableIds(true) }
+        class Holder(val row: LinearLayout) : RecyclerView.ViewHolder(row)
+        override fun getItemCount() = 1
+        override fun getItemId(position: Int) = 0L
+        override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): Holder {
+            val context = parent.context
+            val row = context.row().apply { pad(4, 8); layoutParams = RecyclerView.LayoutParams(-1, context.dp(44)); isFocusable = false }
+            row.addView(View(context).apply { background = shape(Palette.green, context.dp(2).toFloat(), width = 0) }, LayoutParams(context.dp(3), context.dp(20)).apply { rightMargin = context.dp(9) })
+            row.addView(context.text(title, 16f, bold = true), LayoutParams(0, -2, 1f))
+            row.addView(context.text("$count", 11f, Palette.green).apply { pad(9, 3); background = shape(Palette.selected, context.dp(9).toFloat(), width = 0) })
+            row.contentDescription = "$title · $count favoritos"
+            return Holder(row)
+        }
+        override fun onBindViewHolder(holder: Holder, position: Int) = Unit
+    }
 
     private inner class CategoryAdapter(val groups: List<Category>, val selected: () -> String, val choose: (String) -> Unit) : RecyclerView.Adapter<CategoryAdapter.Holder>() {
         inner class Holder(val button: Button) : RecyclerView.ViewHolder(button)

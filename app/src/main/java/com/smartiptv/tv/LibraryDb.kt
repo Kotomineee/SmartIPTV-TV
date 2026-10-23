@@ -122,12 +122,20 @@ class LibraryDb(context: Context) : SQLiteOpenHelper(context, "library.db", null
         buildList { while (cursor.moveToNext()) add(Category(cursor.getString(0), cursor.getString(1))) }
     }
 
-    fun page(account: String, kind: String, category: String = "", search: String = "", alphabetical: Boolean = false, offset: Int = 0, limit: Int = 60): Page {
+    fun page(account: String, kind: String, category: String = "", search: String = "", alphabetical: Boolean = false, offset: Int = 0, limit: Int = 60, favoriteKind: String = ""): Page {
         val fromLibrary = kind in listOf("favorites", "continue")
         val conditions = mutableListOf("c.account=?")
         val args = mutableListOf(account)
         if (fromLibrary) conditions += if (kind == "favorites") "c.favorite=1" else "c.position>=1000 AND c.finished=0"
         else if (kind != "all") { conditions += "c.kind=?"; args += kind }
+        if (kind == "favorites" && favoriteKind.isNotEmpty()) {
+            conditions += when (favoriteKind) {
+                "movie" -> "c.uid LIKE 'movie:%'"
+                "series" -> "(c.uid LIKE 'series:%' OR c.uid LIKE 'episode:%')"
+                "live" -> "c.uid LIKE 'live:%'"
+                else -> "0"
+            }
+        }
         if (category.isNotEmpty() && !fromLibrary) {
             conditions += "EXISTS(SELECT 1 FROM item_category g WHERE g.account=c.account AND g.uid=c.uid AND g.category=?)"
             args += category

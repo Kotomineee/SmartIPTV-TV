@@ -19,6 +19,7 @@ class TestProvider(context: Context) : AutoCloseable {
     @Volatile var largeCatalog = false
     val catalogRequests = java.util.concurrent.atomic.AtomicInteger()
     val seriesInfoRequests = java.util.concurrent.atomic.AtomicInteger()
+    val movieInfoRequests = java.util.concurrent.atomic.AtomicInteger()
     val server = MockWebServer()
     val failedMedia = Collections.synchronizedSet(mutableSetOf<String>())
     val posterRequests = Collections.synchronizedList(mutableListOf<String>())
@@ -57,6 +58,7 @@ class TestProvider(context: Context) : AutoCloseable {
                 if (user != "demo" || password != "demopass") return json(JSONObject().put("user_info", JSONObject().put("auth", 0)))
                 val action = request.requestUrl?.queryParameter("action") ?: ""
                 if (action == "get_series_info") seriesInfoRequests.incrementAndGet()
+                if (action == "get_vod_info") movieInfoRequests.incrementAndGet()
                 if (action in listOf("get_vod_streams", "get_series", "get_live_streams")) {
                     catalogRequests.incrementAndGet()
                     if (largeCatalog) return largeResponse(action)

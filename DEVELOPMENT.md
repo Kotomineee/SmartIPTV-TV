@@ -56,7 +56,14 @@ Partial episodes show "Parou em mm:ss" (or h:mm:ss) under the episode title.
 Exiting episode playback waits for pending progress writes and restores the same
 series, current season and focused episode, including after autoplay and playback
 started from Continue Watching. The loaded series metadata is reused on return.
-Movie/live exits still return to the catalog. UI tests cover both exit controls,
+Movie exits now restore their details, with cached metadata when available and a
+visible saved time. Movie cards show the saved time in place of the year while
+partially watched; completion clears that indicator. Live exits return to the catalog.
+Favorites use a single recycled grid with full-width Films/Series section headers
+and counts. Legacy episode favorites stay in Series, and live favorites retain a
+separate TV section. Each section pages independently with the existing metadata
+cap; search, ordering and account isolation are applied in SQL before paging.
+UI tests cover both exit controls,
 resuming with OK, persistent progress, catalog Back navigation and 720p/1080p.
 
 Publishing is performed manually through Kotomineee's authenticated account,

@@ -400,6 +400,99 @@ class RemoteFlowTest {
         device.executeShellCommand("wm size reset")
     }
 
+    @Test fun movieExitReturnsToDetailsAndShowsResumeTimeInTheMovieCatalog() {
+        login()
+        navigate("movie"); ui { it.catalogView!!.focusContent() }; device.pressDPadCenter()
+        waitFor("Movie metadata did not load") { it.details?.moviePlotSnapshot() != null }
+        ui { it.details!!.favorite.requestFocus() }; device.pressDPadCenter()
+        waitFor("Movie favorite did not save") { it.database.page(provider.account, "favorites").total == 1 }
+        ui { it.details!!.watch.requestFocus() }; device.pressDPadCenter()
+        waitFor("Movie did not play") { it.playerView?.item?.uid == "movie:120" && it.playerView?.engine?.playbackState == Player.STATE_READY }
+        ui { it.playerView!!.engine!!.pause(); it.playerView!!.engine!!.seekTo(7300) }
+        waitFor("Movie seek did not settle") { it.playerView?.engine?.currentPosition == 7300L }
+        val requests = provider.movieInfoRequests.get()
+        focusDescription("Voltar ao filme"); device.pressDPadCenter()
+        fun expectReturn() {
+            waitFor("Movie exit did not restore details and saved time") {
+                it.playerView == null && it.details?.item?.uid == "movie:120" && it.details?.movieResume?.text?.toString() == "Parou em 00:07" && it.details?.watch?.hasFocus() == true
+            }
+            ui { assertEquals("Continuar assistindo", it.details!!.watch.text.toString()) }
+        }
+        expectReturn()
+        assertEquals("Returning to the movie downloaded its metadata again", requests, provider.movieInfoRequests.get())
+        capture("17-movie-resume-return-1080p")
+        device.pressBack(); waitFor("Movie detail did not close to its catalog") { it.details == null }
+        waitFor("Movie catalog card did not display saved time") {
+            (it.catalogView!!.grid.findViewHolderForAdapterPosition(0) as? CatalogAdapter.Holder)?.tile?.description?.text?.toString() == "Parou em 00:07"
+        }
+        capture("18-movie-catalog-resume")
+        scenario.close(); scenario = ActivityScenario.launch(MainActivity::class.java)
+        waitFor("Movie resume session did not restore") { it.catalogView != null }
+        navigate("favorites"); waitFor("Movie favorite sections not loaded") { it.catalogView!!.count.text.toString() == "1 conteúdos" }
+        ui { it.catalogView!!.focusContent() }; device.pressDPadCenter()
+        waitFor("Favorite movie lost saved time after restart") { it.details?.movieResume?.text?.toString() == "Parou em 00:07" }
+        ui { it.details!!.watch.requestFocus() }; device.pressDPadCenter()
+        waitFor("Movie did not resume from its saved position") { it.playerView?.engine?.let { p -> p.playbackState == Player.STATE_READY && p.currentPosition >= 7000 } == true }
+        ui { it.playerView!!.engine!!.pause(); it.playerView!!.engine!!.seekTo(7300); it.playerView!!.hideControls() }
+        device.pressBack(); expectReturn()
+        device.executeShellCommand("wm size 1280x720")
+        waitFor("Movie resume controls clipped at 720p") {
+            it.window.decorView.width == 1280 && listOfNotNull(it.details?.movieResume, it.details?.watch).let { views -> views.size == 2 && views.all { v -> val r = Rect(); v.getGlobalVisibleRect(r) && r.width() == v.width && r.height() == v.height } }
+        }
+        capture("19-movie-resume-return-720p")
+        device.pressBack(); waitFor("Movie detail did not close to favorites") { it.details == null }
+        waitFor("Favorite movie navigation lost focus") { it.catalogView!!.grid.hasFocus() }
+        device.executeShellCommand("wm size reset")
+    }
+
+    @Test fun favoritesAreSeparatedAndRemainSearchableSortableAndRemoteNavigable() {
+        login()
+        ui { activity ->
+            val db = activity.database
+            db.page(provider.account, "movie", limit = 3).items.forEach { db.toggleFavorite(provider.account, it) }
+            db.page(provider.account, "series", limit = 2).items.forEach { db.toggleFavorite(provider.account, it) }
+            db.toggleFavorite(provider.account, db.page(provider.account, "live", limit = 1).items.single())
+        }
+        navigate("favorites")
+        waitFor("Favorite sections did not load") { it.catalogView!!.count.text.toString() == "6 conteúdos" && it.catalogView!!.grid.adapter?.itemCount == 9 }
+        ui { activity ->
+            val grid = activity.catalogView!!.grid
+            assertTrue(grid.adapter is androidx.recyclerview.widget.ConcatAdapter)
+            val manager = grid.layoutManager as androidx.recyclerview.widget.GridLayoutManager
+            listOf(0, 4, 7).forEach { assertEquals(manager.spanCount, manager.spanSizeLookup.getSpanSize(it)) }
+            listOf(1, 2, 3, 5, 6, 8).forEach { assertEquals(1, manager.spanSizeLookup.getSpanSize(it)) }
+            activity.catalogView!!.focusContent()
+        }
+        waitFor("Favorites did not focus a movie card") { (it.currentFocus as? CatalogAdapter.Tile)?.title?.text?.toString()?.let { name -> name.startsWith("Filme") || name == "Além do horizonte" } == true }
+        capture("20-favorites-movies-and-series-1080p")
+        device.pressDPadDown()
+        waitFor("D-pad did not cross the favorite section heading") { (it.currentFocus as? CatalogAdapter.Tile)?.title?.text?.toString()?.startsWith("Novos caminhos") == true }
+        capture("21-favorites-series-focus")
+        device.pressDPadLeft()
+        waitFor("Left from series favorites did not reach sidebar") { it.catalogView!!.nav.getValue("favorites").hasFocus() }
+        ui { it.catalogView!!.search.setText("caminhos") }
+        waitFor("Favorite search did not filter across sections") { it.catalogView!!.count.text.toString() == "2 conteúdos" && it.catalogView!!.grid.adapter?.itemCount == 3 }
+        ui { it.catalogView!!.order.requestFocus() }; device.pressDPadCenter()
+        waitFor("Favorite section ordering failed") { it.catalogView!!.order.text.toString() == "Nome A–Z" && it.catalogView!!.count.text.toString() == "2 conteúdos" && (it.catalogView!!.grid.findViewHolderForAdapterPosition(1) as? CatalogAdapter.Holder)?.card?.item?.name == "Novos caminhos 3" }
+        ui { it.catalogView!!.focusContent() }; device.pressDPadCenter()
+        waitFor("Filtered series favorite did not open") { it.details?.watch?.isEnabled == true }
+        ui { it.details!!.favorite.requestFocus() }; device.pressDPadCenter()
+        waitFor("Favorite removal failed") { it.database.page(provider.account, "favorites").total == 5 }
+        device.pressBack()
+        waitFor("Empty favorite section was not removed on reload") { it.details == null && it.catalogView!!.count.text.toString() == "1 conteúdos" && it.catalogView!!.grid.adapter?.itemCount == 2 }
+        ui { it.catalogView!!.search.setText("zzznada") }
+        waitFor("Empty favorites search left stale section headers") { it.catalogView!!.count.text.toString() == "0 conteúdos" && it.catalogView!!.grid.adapter?.itemCount == 0 }
+        ui { it.catalogView!!.search.text.clear() }
+        waitFor("Clearing favorite search lost saved contents") { it.catalogView!!.count.text.toString() == "5 conteúdos" && it.catalogView!!.grid.adapter?.itemCount == 8 }
+        device.executeShellCommand("wm size 1280x720")
+        waitFor("720p favorite grid not ready") { it.window.decorView.width == 1280 && it.catalogView!!.grid.childCount > 0 }
+        ui { it.catalogView!!.focusContent() }; device.pressDPadDown()
+        waitFor("720p favorites control navigation failed") { it.catalogView!!.grid.hasFocus() }
+        capture("22-favorites-sections-720p")
+        ui { assertTrue(it.images.memoryBytes <= 6 * 1024 * 1024); assertTrue(it.images.pendingCount <= 48) }
+        device.executeShellCommand("wm size reset")
+    }
+
     @Test fun episodeExitRestoresSameSeasonAndEpisodeWithPersistentResumeTime() {
         login()
         navigate("series"); ui { it.catalogView!!.focusContent() }; device.pressDPadCenter()

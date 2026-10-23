@@ -25,6 +25,7 @@ class MainActivity : Activity() {
     var playerView: TvPlayer? = null; private set
     private var playbackSeries: Content? = null
     private var playbackSeriesInfo: SeriesInfo? = null
+    private var playbackMoviePlot: String? = null
     private var playbackCatalogFocus: View? = null
     private var focusedBeforeDetails: View? = null
     private var catalogJob: Future<*>? = null
@@ -126,12 +127,12 @@ class MainActivity : Activity() {
         }
         showDetails(item)
     }
-    private fun showDetails(item: Content, returnEpisode: Content? = null, cachedSeries: SeriesInfo? = null) {
+    private fun showDetails(item: Content, returnEpisode: Content? = null, cachedSeries: SeriesInfo? = null, cachedMoviePlot: String? = null) {
         val client = api ?: return
         closeDetails()
         val catalog = catalogView ?: return
         focusedBeforeDetails = currentFocus
-        val detail = DetailView(this, item, client, database, jobs, images, catalog, ::closeDetails, { content, restart, episodes -> play(content, restart, episodes) }, returnEpisode, cachedSeries)
+        val detail = DetailView(this, item, client, database, jobs, images, catalog, ::closeDetails, { content, restart, episodes -> play(content, restart, episodes) }, returnEpisode, cachedSeries, cachedMoviePlot)
         details = detail
         catalog.descendantFocusability = ViewGroup.FOCUS_BLOCK_DESCENDANTS
         catalog.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
@@ -147,7 +148,7 @@ class MainActivity : Activity() {
             detail.dismiss(); root.removeView(detail); details = null
             catalogView?.descendantFocusability = ViewGroup.FOCUS_AFTER_DESCENDANTS
             catalogView?.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_AUTO
-            focusedBeforeDetails?.takeIf { it.isAttachedToWindow }?.requestFocus()
+            if (focusedBeforeDetails?.takeIf { it.isAttachedToWindow }?.requestFocus() != true) catalogView?.focusContent()
             focusedBeforeDetails = null
             catalogView?.restorePosters()
             catalogView?.refreshLibrary()
@@ -172,6 +173,7 @@ class MainActivity : Activity() {
         playbackSeries = if (item.kind == "episode" && item.seriesId.isNotBlank()) series ?: details?.item?.takeIf { it.kind == "series" && it.id == item.seriesId }
             ?: Content("series", item.seriesId, item.seriesName.ifBlank { item.name }, item.categories, item.artwork, year = item.year, rating = item.rating) else null
         playbackSeriesInfo = if (playbackSeries != null) seriesInfo ?: details?.seriesSnapshot() ?: episodes.takeIf { it.isNotEmpty() }?.let { SeriesInfo(it, playbackSeries!!.plot) } else null
+        playbackMoviePlot = if (item.kind == "movie") details?.moviePlotSnapshot() else null
         playbackCatalogFocus = focusedBeforeDetails ?: currentFocus
         closeDetails()
         playerView?.shutdown(); playerView?.let(root::removeView)
@@ -183,18 +185,23 @@ class MainActivity : Activity() {
     fun leavePlayer() {
         val current = playerView ?: return
         val episode = current.item.takeIf { it.kind == "episode" }
+        val movie = current.item.takeIf { it.kind == "movie" }
+        val moviePlot = playbackMoviePlot
         val series = playbackSeries; val seriesInfo = playbackSeriesInfo
         val catalogFocus = playbackCatalogFocus
-        playbackSeries = null; playbackSeriesInfo = null; playbackCatalogFocus = null
+        playbackSeries = null; playbackSeriesInfo = null; playbackMoviePlot = null; playbackCatalogFocus = null
         val token = generation; val request = contentRequest; val screen = catalogView
         current.shutdown(); root.removeView(current); playerView = null
         catalogView?.visibility = View.VISIBLE
         catalogView?.restorePosters()
         jobs.afterWrites {
             if (token == generation && request == contentRequest && playerView == null && details == null && catalogView === screen) {
-                screen?.restoreAfterPlayback(focus = episode == null || series == null)
+                screen?.restoreAfterPlayback(focus = movie == null && (episode == null || series == null))
                 if (episode != null && series != null) {
                     showDetails(series, episode, seriesInfo)
+                    focusedBeforeDetails = catalogFocus?.takeIf { it.isAttachedToWindow }
+                } else if (movie != null) {
+                    showDetails(movie, cachedMoviePlot = moviePlot)
                     focusedBeforeDetails = catalogFocus?.takeIf { it.isAttachedToWindow }
                 }
             }
@@ -204,7 +211,7 @@ class MainActivity : Activity() {
     private fun logout() {
         cancelPendingContent()
         ++generation; handler.removeCallbacks(accountPoll)
-        playerView?.shutdown(); playerView = null; playbackSeries = null; playbackSeriesInfo = null; playbackCatalogFocus = null; closeDetails()
+        playerView?.shutdown(); playerView = null; playbackSeries = null; playbackSeriesInfo = null; playbackMoviePlot = null; playbackCatalogFocus = null; closeDetails()
         catalogJob?.cancel(true); catalogJob = null; accountJob?.cancel(true); accountJob = null
         api?.cancel(); api = null; vault.clear(); images.switchScreen(); showLogin()
     }
@@ -234,7 +241,7 @@ class MainActivity : Activity() {
         if (level >= TRIM_MEMORY_RUNNING_LOW) images.switchScreen()
     }
     override fun onDestroy() {
-        playerView?.shutdown(); playerView = null; playbackSeries = null; playbackSeriesInfo = null; playbackCatalogFocus = null; details?.dismiss(); details = null
+        playerView?.shutdown(); playerView = null; playbackSeries = null; playbackSeriesInfo = null; playbackMoviePlot = null; playbackCatalogFocus = null; details?.dismiss(); details = null
         generation++; handler.removeCallbacksAndMessages(null); api?.cancel(); images.close()
         jobs.close { database.close() }; super.onDestroy()
     }

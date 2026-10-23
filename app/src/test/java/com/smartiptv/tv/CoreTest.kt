@@ -123,6 +123,59 @@ class CoreTest {
         assertTrue(db.isFavorite(account, movie)); assertEquals(movie, db.page(account, "favorites").items.single())
         assertFalse(db.toggleFavorite(account, movie)); assertEquals(0, db.page(account, "favorites").total)
     }
+    @Test fun favoriteSectionsKeepTypesAccountsAndLegacyEpisodeFavoritesSeparate() {
+        val episode = Content("episode", "101", "Estreia", seriesId = series.id)
+        val live = Content("live", "live1", "Canal")
+        listOf(movie, series, episode, live).forEach { db.toggleFavorite(account, it) }
+        db.toggleFavorite("other-account", movie.copy(id = "other"))
+        db.close(); db = LibraryDb(context)
+        assertEquals(listOf(movie.uid), db.page(account, "favorites", favoriteKind = "movie").items.map { it.uid })
+        assertEquals(setOf(series.uid, episode.uid), db.page(account, "favorites", favoriteKind = "series").items.map { it.uid }.toSet())
+        assertEquals(listOf(live.uid), db.page(account, "favorites", favoriteKind = "live").items.map { it.uid })
+        assertEquals(4, db.page(account, "favorites").total)
+        assertEquals(0, db.page("missing", "favorites", favoriteKind = "movie").total)
+        db.toggleFavorite(account, movie)
+        assertEquals(0, db.page(account, "favorites", favoriteKind = "movie").total)
+        assertEquals(2, db.page(account, "favorites", favoriteKind = "series").total)
+    }
+    @Test fun favoriteSectionsPaginateSearchAndSortWithoutMixingContentTypes() {
+        repeat(85) { db.toggleFavorite(account, movie.copy(id = "m$it", name = "Filme %03d".format(it))) }
+        repeat(45) { db.toggleFavorite(account, series.copy(id = "s$it", name = "Série %03d".format(it))) }
+        val first = db.page(account, "favorites", alphabetical = true, limit = 40, favoriteKind = "movie")
+        val second = db.page(account, "favorites", alphabetical = true, offset = 40, limit = 40, favoriteKind = "movie")
+        assertEquals(85, first.total); assertEquals(40, first.items.size)
+        assertEquals("Filme 040", second.items.first().name)
+        assertTrue(first.items.none { it in second.items })
+        assertEquals(5, db.page(account, "favorites", offset = 80, limit = 40, favoriteKind = "movie").items.size)
+        assertEquals(45, db.page(account, "favorites", favoriteKind = "series").total)
+        assertEquals(5, db.page(account, "favorites", search = "serie 04", favoriteKind = "series").total)
+        assertEquals(0, db.page(account, "favorites", search = "serie", favoriteKind = "movie").total)
+    }
+    @Test fun movieResumeTimeSurvivesRestartAndCompletionKeepsTheFavorite() {
+        db.toggleFavorite(account, movie)
+        db.record(account, movie, 754000, 2400000)
+        db.close(); db = LibraryDb(context)
+        assertEquals(754000L, db.cards(account, Page(listOf(movie), 1)).cards.single().progress!!.position)
+        assertEquals(754000L, db.checkpoint(account, movie)!!.position)
+        db.record(account, movie, 2400000, 2400000, true)
+        assertNull(db.checkpoint(account, movie))
+        assertNull(db.cards(account, db.page(account, "favorites", favoriteKind = "movie")).cards.single().progress)
+        assertTrue(db.isFavorite(account, movie))
+    }
+    @Test fun movieTileUpdatesAndClearsItsVisibleResumeTime() {
+        val loader = ArtworkLoader(context)
+        val adapter = CatalogAdapter(loader, {}, {}, { _, _, _ -> })
+        val holder = adapter.onCreateViewHolder(FrameLayout(context), 0)
+        val item = movie.copy(year = "2025")
+        holder.bind(CardData(item, true, Progress(item, 3723000, 0, false, 1)))
+        assertEquals("Parou em 1:02:03", holder.tile.description.text.toString())
+        assertTrue(holder.tile.contentDescription.toString().contains("Parou em 1:02:03"))
+        holder.indicators(CardData(item, true, null))
+        assertEquals("2025", holder.tile.description.text.toString())
+        assertFalse(holder.tile.contentDescription.toString().contains("Parou em"))
+        holder.bind(null); assertEquals("", holder.tile.description.text.toString())
+        loader.close()
+    }
     @Test fun progressResumesAndCompletionRemovesContinueEntry() {
         val episode = Content("episode", "101", "Episódio 1", seriesId = series.id, seriesName = series.name, season = 1, episode = 1)
         db.record(account, episode, 7000, 20000)
