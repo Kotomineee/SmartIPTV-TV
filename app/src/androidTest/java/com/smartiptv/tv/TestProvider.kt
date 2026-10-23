@@ -57,7 +57,7 @@ class TestProvider(context: Context) : AutoCloseable {
         }
         server.start()
         // Resolve the fixture host on the instrumentation thread, never in a UI assertion.
-        url = server.url("/").toString().trimEnd('/')
+        url = "http://127.0.0.1:${server.port}"
         account = Credentials.validated(url, "demo", "demopass").account
     }
     private fun json(value: Any): MockResponse = MockResponse().setHeader("Content-Type", "application/json").setBody(value.toString())

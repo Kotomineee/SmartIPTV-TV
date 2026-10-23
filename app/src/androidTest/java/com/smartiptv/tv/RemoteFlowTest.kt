@@ -40,16 +40,18 @@ class RemoteFlowTest {
     @After fun cleanup() { device.executeShellCommand("wm size reset"); scenario.close(); provider.close() }
     private fun ui(action: (MainActivity) -> Unit) { scenario.onActivity(action) }
     private fun waitFor(description: String, timeout: Long = 20000, condition: (MainActivity) -> Boolean) {
+        android.util.Log.i("SmartIPTVTest", "Waiting: $description")
         val deadline = SystemClock.uptimeMillis() + timeout
         while (SystemClock.uptimeMillis() < deadline) {
             val result = AtomicReference(false)
             scenario.onActivity { result.set(condition(it)) }
-            if (result.get()) return
+            if (result.get()) { android.util.Log.i("SmartIPTVTest", "Passed: $description"); return }
             SystemClock.sleep(80)
         }
         throw AssertionError(description)
     }
     private fun capture(name: String) {
+        android.util.Log.i("SmartIPTVTest", "Capture: $name")
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val directory = context.getExternalFilesDir("screenshots")!!
         directory.mkdirs()

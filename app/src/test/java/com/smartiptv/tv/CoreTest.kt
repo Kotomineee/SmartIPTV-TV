@@ -182,4 +182,20 @@ class CoreTest {
         assertEquals(1, delayed.count); assertEquals(1, delayed.retainedItems)
         loader.switchScreen(); assertEquals(0, loader.memoryBytes); loader.close()
     }
+    @Test fun loginLayoutSettlesAfterResizing() {
+        val form = LoginView(context, SessionVault(context)) { _, _ -> }
+        for ((width, height) in listOf(1920 to 1080, 640 to 360, 1920 to 1080)) {
+            repeat(3) {
+                form.forceLayout()
+                form.measure(android.view.View.MeasureSpec.makeMeasureSpec(width, android.view.View.MeasureSpec.EXACTLY), android.view.View.MeasureSpec.makeMeasureSpec(height, android.view.View.MeasureSpec.EXACTLY))
+                form.layout(0, 0, width, height)
+            }
+            fun check(view: android.view.View, path: String = "root") {
+                if (view.visibility == android.view.View.GONE) return
+                assertFalse("Unsettled layout at ${width}x$height: $path ${view.javaClass.simpleName} width=${view.width} gravity=${(view as? android.widget.LinearLayout)?.gravity}", view.isLayoutRequested)
+                if (view is android.view.ViewGroup) for (index in 0 until view.childCount) check(view.getChildAt(index), "$path/$index")
+            }
+            check(form)
+        }
+    }
 }

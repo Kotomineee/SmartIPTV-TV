@@ -74,11 +74,12 @@ class LoginView(context: Context, vault: SessionVault, private val login: (Crede
         server.nextFocusDownId = username.id; username.nextFocusDownId = password.id
         password.nextFocusDownId = remember.id; password.nextFocusRightId = reveal.id; reveal.nextFocusLeftId = password.id
         remember.nextFocusDownId = submit.id; submit.nextFocusUpId = remember.id
-        addOnLayoutChangeListener { _, left, _, right, _, _, _, _, _ ->
+        addOnLayoutChangeListener { _, left, _, right, _, oldLeft, _, oldRight, _ ->
+            if (right - left == oldRight - oldLeft) return@addOnLayoutChangeListener
             val wide = right - left >= context.dp(800)
             val visibility = if (wide) VISIBLE else GONE
             if (hero.visibility != visibility) hero.visibility = visibility
-            val gravity = if (wide) Gravity.CENTER_VERTICAL else Gravity.CENTER
+            val gravity = if (wide) Gravity.START or Gravity.CENTER_VERTICAL else Gravity.CENTER
             if (body.gravity != gravity) body.gravity = gravity
             val desired = minOf(context.dp(if (wide) 365 else 410), body.width.coerceAtLeast(1))
             if (scroll.layoutParams.width != desired) {
