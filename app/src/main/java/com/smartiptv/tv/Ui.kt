@@ -44,8 +44,8 @@ fun shape(color: Int, radius: Float = 10f, border: Int = Palette.line, width: In
 fun Context.focusBackground(primary: Boolean = false, selected: Boolean = false): Drawable {
     val radius = dp(8).toFloat()
     return StateListDrawable().apply {
-        addState(intArrayOf(android.R.attr.state_focused), shape(if (primary) Palette.green else Palette.selected, radius, Palette.green, dp(2)))
-        addState(intArrayOf(android.R.attr.state_pressed), shape(Palette.selected, radius, Palette.green, dp(1)))
+        addState(intArrayOf(android.R.attr.state_focused), shape(if (primary) Color.rgb(139, 244, 199) else Palette.selected, radius, Palette.green, dp(2)))
+        addState(intArrayOf(android.R.attr.state_pressed), shape(if (primary) Color.rgb(82, 201, 151) else Palette.selected, radius, Palette.green, dp(1)))
         addState(intArrayOf(), shape(if (primary) Palette.green else if (selected) Palette.selected else Palette.surface, radius,
             if (primary) Palette.green else Palette.line, dp(1)))
     }
@@ -81,7 +81,7 @@ fun Context.input(name: String, password: Boolean = false): EditText = EditText(
     imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_NEXT
 }
 fun Context.column(): LinearLayout = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-fun Context.row(): LinearLayout = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+fun Context.row(): LinearLayout = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; isBaselineAligned = false }
 fun LinearLayout.gap(height: Int) { addView(View(context), LinearLayout.LayoutParams(1, context.dp(height))) }
 fun LinearLayout.rule() { addView(View(context).apply { setBackgroundColor(Palette.line) }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, context.dp(1))) }
 fun TextView.singleLineEllipsis() { maxLines = 1; ellipsize = TextUtils.TruncateAt.END }
@@ -103,6 +103,15 @@ class Glyph(private val symbol: String, private val color: Int = Palette.green, 
             "heart" -> { path.moveTo(12f, 21f); path.cubicTo(-7f, 8f, 7f, -3f, 12f, 6f); path.cubicTo(17f, -3f, 31f, 8f, 12f, 21f) }
             "play" -> { path.moveTo(8f, 4f); path.lineTo(20f, 12f); path.lineTo(8f, 20f); path.close() }
             "pause" -> { canvas.drawLine(8f, 5f, 8f, 19f, paint); canvas.drawLine(16f, 5f, 16f, 19f, paint) }
+            "rewind", "forward" -> {
+                canvas.save()
+                if (symbol == "forward") canvas.scale(-1f, 1f, 12f, 12f)
+                canvas.drawArc(RectF(4f, 4f, 20f, 20f), -80f, 300f, false, paint)
+                path.moveTo(4f, 2f); path.lineTo(4f, 9f); path.lineTo(11f, 9f)
+                canvas.drawPath(path, paint); path.reset(); canvas.restore()
+                paint.style = Paint.Style.FILL; paint.textSize = 8f; paint.textAlign = Paint.Align.CENTER
+                canvas.drawText("10", 12f, 16f, paint); paint.style = Paint.Style.STROKE
+            }
             "back" -> { path.moveTo(14f, 5f); path.lineTo(7f, 12f); path.lineTo(14f, 19f); path.moveTo(7f, 12f); path.lineTo(22f, 12f) }
             "close" -> { canvas.drawLine(6f, 6f, 18f, 18f, paint); canvas.drawLine(18f, 6f, 6f, 18f, paint) }
             "clock" -> { canvas.drawCircle(12f, 12f, 9f, paint); path.moveTo(12f, 6f); path.lineTo(12f, 12f); path.lineTo(16f, 15f) }

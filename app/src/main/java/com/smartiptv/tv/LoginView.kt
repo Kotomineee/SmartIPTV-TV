@@ -74,6 +74,11 @@ class LoginView(context: Context, vault: SessionVault, private val login: (Crede
         server.nextFocusDownId = username.id; username.nextFocusDownId = password.id
         password.nextFocusDownId = remember.id; password.nextFocusRightId = reveal.id; reveal.nextFocusLeftId = password.id
         remember.nextFocusDownId = submit.id; submit.nextFocusUpId = remember.id
+        listOf(remember, submit).forEach { control ->
+            control.setOnFocusChangeListener { _, focused -> if (focused) {
+                (context.getSystemService(Context.INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager).hideSoftInputFromWindow(windowToken, 0)
+            } }
+        }
         addOnLayoutChangeListener { _, left, _, right, _, oldLeft, _, oldRight, _ ->
             if (right - left == oldRight - oldLeft) return@addOnLayoutChangeListener
             val wide = right - left >= context.dp(800)

@@ -125,7 +125,10 @@ class CatalogView(
             (context.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager).hideSoftInputFromWindow(search.windowToken, 0)
             render(); grid.post { focusContent() }; true
         }
-        nav.values.forEach { button -> button.nextFocusRightId = search.id }
+        nav.values.forEach { button ->
+            button.nextFocusRightId = search.id
+            button.setOnFocusChangeListener { _, focused -> if (focused) focusAfterLoad = false }
+        }
         search.nextFocusLeftId = nav.getValue("home").id
         home.setOnScrollChangeListener { _, _, _, _, _ -> homeRows.forEach { it.second.reloadPosters() } }
         navigate("home")
@@ -139,6 +142,7 @@ class CatalogView(
     fun message(text: String, error: Boolean = false) { status.text = text; status.setTextColor(if (error) Palette.error else Palette.green); status.visibility = if (text.isBlank()) GONE else VISIBLE }
     fun refreshing(value: Boolean) { refreshButton.isEnabled = !value; refreshButton.text = if (value) "Atualizando…" else "Atualizar conteúdos" }
     fun navigate(next: String) {
+        focusAfterLoad = false
         beforeNavigate()
         if (next != tab) {
             restoreGrid = null; restoreCategory = null; restoreHomeY = 0; restoreHomeRows = emptyList()
@@ -180,7 +184,7 @@ class CatalogView(
         }
         render()
     }
-    fun restoreAfterPlayback() { focusAfterLoad = true; reload() }
+    fun restoreAfterPlayback() { focusAfterLoad = !nav.values.any { it.hasFocus() } && !search.hasFocus() && !order.hasFocus() && !categories.hasFocus(); reload() }
     fun releasePosters() { images.switchScreen() }
     fun restorePosters() { adapter.reloadPosters(); homeRows.forEach { it.second.reloadPosters() } }
     fun focusContent() {
@@ -190,6 +194,7 @@ class CatalogView(
     }
     override fun dispatchKeyEvent(event: android.view.KeyEvent): Boolean {
         if (event.action == android.view.KeyEvent.ACTION_DOWN) {
+            focusAfterLoad = false
             if (event.keyCode == android.view.KeyEvent.KEYCODE_DPAD_RIGHT && nav.values.any { it.hasFocus() }) { focusContent(); return true }
             if (event.keyCode == android.view.KeyEvent.KEYCODE_DPAD_LEFT && grid.hasFocus()) {
                 val holder = grid.findContainingViewHolder(grid.findFocus() ?: grid)

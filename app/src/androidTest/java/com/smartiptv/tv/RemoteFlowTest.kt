@@ -28,6 +28,7 @@ class RemoteFlowTest {
     private lateinit var device: UiDevice
     @Before fun setup() {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
+        instrumentation.setInTouchMode(false)
         val context = instrumentation.targetContext
         context.deleteDatabase("library.db")
         context.getSharedPreferences("session", 0).edit().clear().commit()
@@ -216,6 +217,7 @@ class RemoteFlowTest {
                 assertTrue(activity.catalogView!!.grid.width > 0)
             }
             capture("09-layout-$size")
+            ui { it.database.record(provider.account, Content("episode", "101", "Episódio 1", seriesId = "4", seriesName = "Novos caminhos 4", season = 1, episode = 1), 5000, 20000) }
             navigate("series"); ui { it.catalogView!!.focusContent() }; device.pressDPadCenter()
             waitFor("Series layout not ready at $size") { it.details?.watch?.isEnabled == true && it.details!!.episodeList.childCount > 0 }
             ui { assertTrue("Episode list too short at $size", it.details!!.episodeList.height >= it.dp(43)) }
