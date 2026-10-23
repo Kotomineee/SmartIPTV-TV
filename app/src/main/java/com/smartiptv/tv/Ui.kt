@@ -90,6 +90,7 @@ class Glyph(private val symbol: String, private val color: Int = Palette.green, 
         canvas.save(); canvas.translate(bounds.left.toFloat(), bounds.top.toFloat()); canvas.scale(bounds.width() / 24f, bounds.height() / 24f)
         val path = Path()
         when (symbol) {
+            "check" -> { path.moveTo(4f, 12f); path.lineTo(9f, 17f); path.lineTo(20f, 6f) }
             "tv", "live", "film", "movie", "series" -> { canvas.drawRoundRect(3f, 4f, 21f, 18f, 2f, 2f, paint); canvas.drawLine(8f, 22f, 16f, 22f, paint); canvas.drawLine(12f, 18f, 12f, 22f, paint) }
             "home" -> { path.moveTo(3f, 11f); path.lineTo(12f, 3f); path.lineTo(21f, 11f); path.moveTo(5f, 10f); path.lineTo(5f, 21f); path.lineTo(19f, 21f); path.lineTo(19f, 10f); path.moveTo(10f, 21f); path.lineTo(10f, 15f); path.lineTo(14f, 15f); path.lineTo(14f, 21f) }
             "heart" -> { path.moveTo(12f, 21f); path.cubicTo(-7f, 8f, 7f, -3f, 12f, 6f); path.cubicTo(17f, -3f, 31f, 8f, 12f, 21f) }

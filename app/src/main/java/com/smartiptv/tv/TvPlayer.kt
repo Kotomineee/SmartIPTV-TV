@@ -205,11 +205,12 @@ class TvPlayer(
     fun saveProgress(finished: Boolean = false) {
         if (engine == null) return
         val current = item
-        val time = if (finished) duration() else position()
+        val completed = finished || ended
+        val time = if (completed) duration().takeIf { it > 0 } ?: resumePosition else position()
         val length = duration()
         if (engine != null) resumePosition = time
         lastSaved = System.currentTimeMillis()
-        jobs.write { db.record(api.credentials.account, current, time, length, finished) }
+        jobs.write { db.record(api.credentials.account, current, time, length, completed) }
     }
     private fun updatePosition() {
         val length = duration()

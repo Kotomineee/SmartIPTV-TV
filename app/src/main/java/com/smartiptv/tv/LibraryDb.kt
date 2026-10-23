@@ -6,7 +6,7 @@ import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
 import org.json.JSONObject
 
-class LibraryDb(context: Context) : SQLiteOpenHelper(context, "library.db", null, 2) {
+class LibraryDb(context: Context) : SQLiteOpenHelper(context, "library.db", null, 3) {
     private val preferences = context.applicationContext.getSharedPreferences("playback", Context.MODE_PRIVATE)
     @Volatile private var nextEpisode = preferences.getBoolean("auto_next", false)
     private val importLock = Any()
@@ -22,6 +22,7 @@ class LibraryDb(context: Context) : SQLiteOpenHelper(context, "library.db", null
         db.execSQL("CREATE TABLE loaded(account TEXT NOT NULL,kind TEXT NOT NULL,updated INTEGER NOT NULL,PRIMARY KEY(account,kind))")
         db.execSQL("CREATE TABLE settings(name TEXT PRIMARY KEY,value TEXT)")
         performanceSchema(db)
+        watchedSchema(db)
     }
     private fun performanceSchema(db: SQLiteDatabase) {
         db.execSQL("ALTER TABLE library ADD COLUMN series_id TEXT NOT NULL DEFAULT ''")
@@ -46,6 +47,12 @@ class LibraryDb(context: Context) : SQLiteOpenHelper(context, "library.db", null
                 }
             }
         }
+        if (oldVersion < 3) watchedSchema(db)
+    }
+    private fun watchedSchema(db: SQLiteDatabase) {
+        db.execSQL("ALTER TABLE library ADD COLUMN watched INTEGER NOT NULL DEFAULT 0")
+        db.execSQL("UPDATE library SET watched=1 WHERE finished=1 AND uid LIKE 'episode:%'")
+        db.execSQL("CREATE INDEX library_watched ON library(account,series_id,watched)")
     }
     /** Called by the startup worker, never while handling a remote click. */
     fun prepare() {
@@ -181,6 +188,8 @@ class LibraryDb(context: Context) : SQLiteOpenHelper(context, "library.db", null
         writableDatabase.update("library", ContentValues().apply {
             put("item", item.json().toString()); put("norm", normalized(item.name)); put("series_id", item.seriesId); put("position", position.coerceAtLeast(0))
             put("duration", duration.coerceAtLeast(0)); put("finished", if (end) 1 else 0); put("updated", System.currentTimeMillis())
+            // Completion history is independent of the current position during a later replay.
+            if (item.kind == "episode" && end) put("watched", 1)
         }, "account=? AND uid=?", arrayOf(account, item.uid))
     }
     fun checkpoint(account: String, item: Content): Progress? {
@@ -198,6 +207,12 @@ class LibraryDb(context: Context) : SQLiteOpenHelper(context, "library.db", null
         }
     }
     fun removeProgress(account: String, item: Content) { writableDatabase.execSQL("UPDATE library SET position=0,duration=0,finished=0 WHERE account=? AND uid=?", arrayOf(account, item.uid)) }
+    fun watchedEpisodes(account: String, seriesId: String): Set<String> {
+        if (seriesId.isBlank()) return emptySet()
+        return readableDatabase.rawQuery("SELECT uid FROM library WHERE account=? AND series_id=? AND watched=1 AND uid LIKE 'episode:%'", arrayOf(account, seriesId)).use { cursor ->
+            buildSet { while (cursor.moveToNext()) add(cursor.getString(0)) }
+        }
+    }
     var autoNext: Boolean
         get() = nextEpisode
         set(value) { nextEpisode = value; preferences.edit().putBoolean("auto_next", value).apply() }

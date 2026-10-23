@@ -34,6 +34,7 @@ class DetailView(
     val seasons = SeasonFlow(context)
     val episodeList = RecyclerView(context)
     private var episodes = emptyList<Content>()
+    private var watched = emptySet<String>()
     private var selectedEpisode: Content? = null
     private var checkpoint: Progress? = null
     private var season = 0
@@ -76,10 +77,12 @@ class DetailView(
             episodeList.layoutManager = LinearLayoutManager(context); episodeList.itemAnimator = null
             panel.addView(episodeList, LinearLayout.LayoutParams(-1, 0, 1f)); watch.isEnabled = false
         }
-        jobs.run(work = { db.isFavorite(account, item) to db.checkpoint(account, item) }, done = { (active, progress) ->
+        jobs.run(work = { Triple(db.isFavorite(account, item), db.checkpoint(account, item), if (series) db.watchedEpisodes(account, item.id) else emptySet()) }, done = { (active, progress, completed) ->
             if (dismissed) return@run
             favorite.text = if (active) "Remover dos favoritos" else "Adicionar aos favoritos"
             checkpoint = progress
+            watched = completed
+            (episodeList.adapter as? EpisodeAdapter)?.let { adapter -> episodeList.post { if (!dismissed && episodeList.adapter === adapter) adapter.notifyItemRangeChanged(0, adapter.itemCount) } }
             if (progress != null) {
                 secondary.addView(context.button(if (series) "Continuar episódio" else "Assistir do início") { play(if (series) progress.item else item, !series, episodes) }, LinearLayout.LayoutParams(-2, context.dp(40)).apply { topMargin = context.dp(8) })
                 if (!series) watch.text = "Continuar assistindo"
@@ -163,18 +166,35 @@ class DetailView(
         plot.maxLines = if (compactSeries) 1 else if (compact) 2 else if (item.kind == "series") 3 else 5
     }
     private inner class EpisodeAdapter(val list: List<Content>) : RecyclerView.Adapter<EpisodeAdapter.Holder>() {
-        inner class Holder(val button: Button) : RecyclerView.ViewHolder(button)
+        inner class Holder(val row: EpisodeRow) : RecyclerView.ViewHolder(row)
         override fun getItemCount() = list.size
-        override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): Holder = Holder(context.button("") {}.apply {
-            gravity = Gravity.START or Gravity.CENTER_VERTICAL; textSize = 12f; maxLines = 2
+        override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): Holder = Holder(EpisodeRow(context).apply {
             layoutParams = RecyclerView.LayoutParams(-1, context.dp(43)).apply { bottomMargin = context.dp(4) }
         })
         override fun onBindViewHolder(holder: Holder, position: Int) {
             val episode = list[position]
-            holder.button.text = "${episode.episode}     ${episode.name}"
-            holder.button.contentDescription = "Episódio ${episode.episode}: ${episode.name}"
-            holder.button.setOnFocusChangeListener { _, focused -> if (focused) selectedEpisode = episode }
-            holder.button.setOnClickListener { play(episode, false, episodes) }
+            val completed = episode.uid in watched
+            holder.row.title.text = "${episode.episode}     ${episode.name}"
+            holder.row.badge.visibility = if (completed) VISIBLE else GONE
+            holder.row.contentDescription = "Episódio ${episode.episode}: ${episode.name}" + if (completed) ", Assistido" else ""
+            holder.row.setOnFocusChangeListener { _, focused -> if (focused) selectedEpisode = episode }
+            holder.row.setOnClickListener { play(episode, false, episodes) }
+        }
+    }
+
+    class EpisodeRow(context: Context) : FrameLayout(context) {
+        val title = context.text("", 12f).apply { maxLines = 2; ellipsize = android.text.TextUtils.TruncateAt.END }
+        val badge = context.text("Assistido", 10f, Palette.green, true).apply {
+            pad(8, 4); background = shape(Palette.selected, context.dp(10).toFloat(), width = 0)
+            setCompoundDrawablesWithIntrinsicBounds(Glyph("check", Palette.green, context.dp(13)), null, null, null)
+            compoundDrawablePadding = context.dp(5); visibility = GONE
+        }
+        init {
+            isFocusable = true; isFocusableInTouchMode = true; background = context.focusBackground(); pad(13, 5)
+            val line = context.row()
+            line.addView(title, LinearLayout.LayoutParams(0, -2, 1f))
+            line.addView(badge, LinearLayout.LayoutParams(-2, -2).apply { leftMargin = context.dp(10) })
+            addView(line, LayoutParams(-1, -1))
         }
     }
 }

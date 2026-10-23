@@ -336,7 +336,7 @@ class CoreTest {
             it.version = 1
         }
         db = LibraryDb(context); db.prepare()
-        assertEquals(2, db.readableDatabase.version)
+        assertEquals(3, db.readableDatabase.version)
         assertTrue(db.autoNext)
         assertEquals(movie.uid, db.page(account, "movie").items.single().uid)
         assertEquals("episode:old-101", db.page(account, "favorites").items.single().uid)
@@ -353,5 +353,48 @@ class CoreTest {
         assertEquals("A série", info.plot)
         assertEquals(60000L, info.episodes.single().duration)
         assertEquals("História", info.episodes.single().plot)
+    }
+
+    @Test fun watchedEpisodeHistorySurvivesReplayRestartAndProgressRemoval() {
+        val episode = Content("episode", "101", "Estreia", seriesId = series.id, seriesName = series.name, season = 1, episode = 1)
+        db.record(account, episode, 5000, 20000)
+        assertTrue(db.watchedEpisodes(account, series.id).isEmpty())
+        db.record(account, episode, 20000, 20000, true)
+        assertEquals(setOf(episode.uid), db.watchedEpisodes(account, series.id))
+        assertEquals(0, db.page(account, "continue").total)
+        db.record(account, episode, 5000, 20000)
+        assertEquals(5000L, db.checkpoint(account, episode)!!.position)
+        assertEquals(setOf(episode.uid), db.watchedEpisodes(account, series.id))
+        db.close(); db = LibraryDb(context)
+        assertEquals(setOf(episode.uid), db.watchedEpisodes(account, series.id))
+        db.removeProgress(account, episode)
+        assertEquals(setOf(episode.uid), db.watchedEpisodes(account, series.id))
+    }
+
+    @Test fun watchedEpisodesAreIsolatedByAccountSeriesAndContentType() {
+        val episode = Content("episode", "101", "Estreia", seriesId = series.id)
+        val nextSeason = episode.copy(id = "201", season = 2)
+        db.record(account, episode, 20000, 20000, true)
+        db.record(account, nextSeason, 20000, 20000, true)
+        db.record(account, movie.copy(seriesId = series.id), 20000, 20000, true)
+        assertEquals(setOf(episode.uid, nextSeason.uid), db.watchedEpisodes(account, series.id))
+        assertTrue(db.watchedEpisodes("other-account", series.id).isEmpty())
+        assertTrue(db.watchedEpisodes(account, "other-series").isEmpty())
+        assertTrue(db.watchedEpisodes(account, "").isEmpty())
+    }
+
+    @Test fun versionTwoMigrationRecognizesPreviouslyCompletedEpisodes() {
+        db.close(); context.deleteDatabase("library.db")
+        val file = context.getDatabasePath("library.db"); file.parentFile!!.mkdirs()
+        android.database.sqlite.SQLiteDatabase.openOrCreateDatabase(file, null).use { old ->
+            old.execSQL("CREATE TABLE library(account TEXT,uid TEXT,finished INTEGER DEFAULT 0,series_id TEXT NOT NULL DEFAULT '',PRIMARY KEY(account,uid))")
+            old.execSQL("INSERT INTO library VALUES (?,?,?,?)", arrayOf<Any>(account, "episode:101", 1, series.id))
+            old.execSQL("INSERT INTO library VALUES (?,?,?,?)", arrayOf<Any>(account, "episode:102", 0, series.id))
+            old.execSQL("INSERT INTO library VALUES (?,?,?,?)", arrayOf<Any>(account, "movie:103", 1, series.id))
+            old.version = 2
+        }
+        db = LibraryDb(context)
+        assertEquals(setOf("episode:101"), db.watchedEpisodes(account, series.id))
+        assertEquals(3, db.readableDatabase.version)
     }
 }

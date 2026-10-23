@@ -336,4 +336,54 @@ class RemoteFlowTest {
         assertEquals("Fresh catalog was downloaded again on restart", requests, provider.catalogRequests.get())
         android.util.Log.i("SmartIPTVTest", "PERFORMANCE: 27000 items, cold=${cold}ms, warm=${SystemClock.uptimeMillis() - warmStart}ms, worst UI heartbeat=${worstPulse}ms, downloads=$requests")
     }
+
+    @Test fun completedEpisodeBadgePersistsAcrossSeasonsReplayAndRestart() {
+        login()
+        fun openSeries() {
+            navigate("series"); ui { it.catalogView!!.focusContent() }; device.pressDPadCenter()
+            waitFor("Episode list not ready") { it.details?.watch?.isEnabled == true && it.details!!.episodeList.childCount > 0 }
+        }
+        fun firstRow(activity: MainActivity) = activity.details!!.episodeList.findViewHolderForAdapterPosition(0)?.itemView as? DetailView.EpisodeRow
+        fun expectWatched(value: Boolean) {
+            waitFor("Wrong watched episode badge: $value") { firstRow(it)?.badge?.visibility == if (value) View.VISIBLE else View.GONE }
+            ui { activity ->
+                val row = firstRow(activity)!!
+                assertEquals(value, row.contentDescription.toString().contains(", Assistido"))
+                if (value) {
+                    val visible = Rect(); assertTrue(row.badge.getGlobalVisibleRect(visible))
+                    assertEquals(row.badge.width, visible.width()); assertEquals(row.badge.height, visible.height())
+                }
+            }
+        }
+        openSeries(); expectWatched(false)
+        ui { it.details!!.watch.requestFocus() }; device.pressDPadCenter()
+        waitFor("Watched episode did not play") { it.playerView?.engine?.playbackState == Player.STATE_READY }
+        ui { it.playerView!!.engine!!.seekTo(it.playerView!!.engine!!.duration - 400); it.playerView!!.engine!!.play() }
+        waitFor("Playback did not record episode completion", 12000) { "episode:101" in it.database.watchedEpisodes(provider.account, "4") }
+        ui { it.leavePlayer() }
+        openSeries(); expectWatched(true)
+        capture("13-episode-watched-1080p")
+        ui { it.details!!.seasons.getChildAt(1).requestFocus() }; device.pressDPadCenter()
+        expectWatched(false)
+        ui { it.details!!.seasons.getChildAt(0).requestFocus() }; device.pressDPadCenter()
+        expectWatched(true)
+
+        // Replaying a completed episode keeps its badge and can still save a new resume position.
+        ui { firstRow(it)!!.requestFocus() }; device.pressDPadCenter()
+        waitFor("Completed episode could not be replayed") { it.playerView?.engine?.let { p -> p.playbackState == Player.STATE_READY && p.currentPosition > 1500 } == true }
+        ui { it.leavePlayer() }
+        openSeries(); expectWatched(true)
+        device.pressBack(); waitFor("Episode modal did not close") { it.details == null }
+        scenario.close(); scenario = ActivityScenario.launch(MainActivity::class.java)
+        waitFor("Session did not restore for watched history") { it.catalogView != null }
+        openSeries(); expectWatched(true)
+
+        device.executeShellCommand("wm size 1280x720")
+        waitFor("720p episode layout not ready") { it.window.decorView.width == 1280 && firstRow(it)?.isShown == true }
+        expectWatched(true); capture("14-episode-watched-720p")
+        ui { firstRow(it)!!.requestFocus() }
+        device.pressDPadDown()
+        waitFor("Watched badge broke D-pad episode navigation") { it.details!!.episodeList.findViewHolderForAdapterPosition(1)?.itemView?.hasFocus() == true }
+        device.executeShellCommand("wm size reset")
+    }
 }

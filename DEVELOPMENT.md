@@ -45,5 +45,13 @@ favorites, catalog and the legacy autoplay setting without clearing user data.
 The TV emulator runs with 1 GiB RAM; a 27,000-item fixture exercises imports,
 autoplay toggles, repeated navigation/details, memory trimming and warm startup.
 
+Database version 3 preserves completed episode history independently from the
+latest resume position. Existing completed episodes are migrated to this history.
+The episode picker loads watched IDs with one indexed query per series on a
+worker; row binding and changing seasons never query SQLite. Completed rows show
+a green check and "Assistido" badge. Replaying or removing a resume entry does
+not clear the watched badge. Tests cover completion through real playback,
+season switching, replay, restart, account isolation, migration and 720p layout.
+
 Publishing is performed manually through Kotomineee's authenticated account,
 with a version title and assets only. GitHub Actions does not publish releases.
