@@ -158,7 +158,6 @@ class CatalogView(
         }
         nav.values.forEach { button ->
             button.nextFocusRightId = search.id
-            button.setOnFocusChangeListener { _, focused -> if (focused) focusAfterLoad = false }
         }
         search.nextFocusLeftId = nav.getValue("home").id
         home.setOnScrollChangeListener { _, _, _, _, _ -> homeRows.forEach { it.second.reloadPosters() } }

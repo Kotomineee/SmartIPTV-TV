@@ -441,7 +441,13 @@ class RemoteFlowTest {
         }
         capture("19-movie-resume-return-720p")
         device.pressBack(); waitFor("Movie detail did not close to favorites") { it.details == null }
+        ui { activity ->
+            val screen = activity.catalogView!!
+            val pending = CatalogView::class.java.getDeclaredField("focusAfterLoad").apply { isAccessible = true }.getBoolean(screen)
+            android.util.Log.i("SmartIPTVTest", "MOVIE_RETURN_FOCUS pending=$pending gridShown=${screen.grid.isShown} gridFocus=${screen.grid.hasFocus()} children=${screen.grid.childCount} current=${activity.currentFocus?.javaClass?.simpleName} count=${screen.count.text}")
+        }
         waitFor("Favorite movie navigation lost focus") { it.catalogView!!.grid.hasFocus() }
+        capture("23-favorite-movie-focus-after-return-720p")
         device.executeShellCommand("wm size reset")
     }
 
