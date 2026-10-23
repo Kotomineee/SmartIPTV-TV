@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 set -uo pipefail
+# The emulator exposes a hardware keyboard; still exercise the real TV IME.
+adb shell settings put secure show_ime_with_hard_keyboard 1
 adb logcat -c
 adb logcat -v brief SmartIPTVTest:I TestRunner:I AndroidRuntime:E '*:S' &
 logger=$!

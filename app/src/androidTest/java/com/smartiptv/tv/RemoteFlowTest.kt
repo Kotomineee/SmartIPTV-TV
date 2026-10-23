@@ -90,6 +90,55 @@ class RemoteFlowTest {
         }
     }
 
+    private fun waitForIme(shown: Boolean) {
+        val deadline = SystemClock.uptimeMillis() + 8000
+        while (SystemClock.uptimeMillis() < deadline) {
+            val input = device.executeShellCommand("dumpsys input_method")
+            if (input.contains("mInputShown=true") == shown) return
+            SystemClock.sleep(100)
+        }
+        capture("failure-keyboard-${if (shown) "missing" else "stuck"}")
+        throw AssertionError("Native keyboard visibility did not become $shown")
+    }
+
+    @Test fun remoteOkOpensNativeKeyboardForLoginAndMovieSeriesSearch() {
+        val ime = device.executeShellCommand("settings get secure default_input_method").trim().substringBefore('/')
+        assertTrue("No system keyboard configured", ime.contains('.'))
+        fun typeInto(name: String, value: String, field: (MainActivity) -> android.widget.EditText) {
+            focusDescription(name)
+            ui { assertFalse("D-pad focus opened the keyboard automatically", field(it).showSoftInputOnFocus) }
+            device.pressDPadCenter()
+            waitForIme(true)
+            assertTrue("System keyboard UI is absent for $name", device.wait(androidx.test.uiautomator.Until.hasObject(By.pkg(ime)), 5000))
+            capture("11-keyboard-" + name.replace(Regex("[^a-zA-Z]"), "-"))
+            device.executeShellCommand("input text $value")
+            waitFor("Native input not delivered to $name") { field(it).text.toString() == value }
+            device.pressBack()
+            waitForIme(false)
+            waitFor("Back dismissed the screen instead of the keyboard") { field(it).isAttachedToWindow && it.hasWindowFocus() }
+        }
+        typeInto("Servidor", provider.url) { it.loginView!!.server }
+        device.pressDPadDown()
+        waitFor("Keyboard dismissal broke username navigation") { it.loginView!!.username.hasFocus() }
+        typeInto("Usuário", "demo") { it.loginView!!.username }
+        device.pressDPadDown()
+        typeInto("Senha", "demopass") { it.loginView!!.password }
+        device.pressDPadDown(); device.pressDPadDown()
+        waitFor("Cannot reach login after native keyboard input") { it.loginView!!.submit.hasFocus() }
+        device.pressDPadCenter()
+        waitFor("Native keyboard login failed") { it.catalogView?.refreshButton?.isEnabled == true && it.database.page(provider.account, "movie").total == 120 }
+        navigate("movie")
+        typeInto("Buscar no catálogo", "horizonte") { it.catalogView!!.search }
+        waitFor("Movie search did not filter") { it.catalogView!!.count.text.toString() == "1 conteúdo" || it.catalogView!!.count.text.toString() == "1 conteúdos" }
+        ui { it.catalogView!!.search.text.clear() }
+        navigate("series")
+        typeInto("Buscar no catálogo", "caminhos") { it.catalogView!!.search }
+        waitFor("Series search did not filter") { it.catalogView!!.count.text.toString().startsWith("4 ") }
+        // A second OK must reopen a dismissed keyboard in the same field.
+        device.pressDPadCenter(); waitForIme(true); device.pressBack(); waitForIme(false)
+        ui { assertEquals("series", it.catalogView!!.tab); assertEquals("caminhos", it.catalogView!!.search.text.toString()) }
+    }
+
     @Test fun completeRemoteFlowAndRealMedia() {
         ui { activity ->
             val form = activity.loginView!!

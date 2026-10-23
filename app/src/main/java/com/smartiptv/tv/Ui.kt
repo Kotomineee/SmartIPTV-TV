@@ -64,21 +64,12 @@ fun Context.button(value: String, primary: Boolean = false, symbol: String? = nu
     setOnClickListener { action() }
     if (symbol != null) { setCompoundDrawablesWithIntrinsicBounds(Glyph(symbol, if (primary) Palette.background else Palette.green, dp(17)), null, null, null); compoundDrawablePadding = dp(7) }
 }
-fun Context.input(name: String, password: Boolean = false): EditText = EditText(this).apply {
+fun Context.input(name: String, password: Boolean = false): EditText = TvTextInput(this).apply {
     contentDescription = name; setTextColor(Palette.text); setHintTextColor(Palette.muted); textSize = 13f
     background = focusBackground(); pad(12, 6); setSingleLine(); minimumHeight = dp(42)
     inputType = if (password) android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD else android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
     if (name == "Servidor") inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_URI
     isSaveEnabled = false
-    showSoftInputOnFocus = false
-    fun openKeyboard() { (context.getSystemService(Context.INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager).showSoftInput(this, android.view.inputmethod.InputMethodManager.SHOW_IMPLICIT) }
-    setOnClickListener { openKeyboard() }
-    setOnKeyListener { _, key, event ->
-        if (key in listOf(android.view.KeyEvent.KEYCODE_DPAD_CENTER, android.view.KeyEvent.KEYCODE_ENTER)) {
-            if (event.action == android.view.KeyEvent.ACTION_UP) openKeyboard()
-            true
-        } else false
-    }
     imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_NEXT
 }
 fun Context.column(): LinearLayout = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }

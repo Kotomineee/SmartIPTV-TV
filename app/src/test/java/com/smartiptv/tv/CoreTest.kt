@@ -198,4 +198,27 @@ class CoreTest {
             check(form)
         }
     }
+
+    @Test fun remoteOkEnablesNativeKeyboardOnlyOnActivation() {
+        val field = context.input("Servidor")
+        assertFalse(field.showSoftInputOnFocus)
+        for (key in listOf(android.view.KeyEvent.KEYCODE_DPAD_CENTER, android.view.KeyEvent.KEYCODE_ENTER, android.view.KeyEvent.KEYCODE_NUMPAD_ENTER)) {
+            field.onKeyPreIme(android.view.KeyEvent.KEYCODE_BACK, android.view.KeyEvent(android.view.KeyEvent.ACTION_UP, android.view.KeyEvent.KEYCODE_BACK))
+            assertFalse(field.showSoftInputOnFocus)
+            field.dispatchKeyEvent(android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN, key))
+            assertFalse("Key down must not open the keyboard twice", field.showSoftInputOnFocus)
+            field.dispatchKeyEvent(android.view.KeyEvent(android.view.KeyEvent.ACTION_UP, key))
+            assertTrue("OK must enable the editor before requesting the IME", field.showSoftInputOnFocus)
+        }
+    }
+
+    @Test fun clickingSearchEnablesEditingAndImeActionReturnsToNavigation() {
+        val field = context.input("Buscar no catálogo")
+        field.setText("Horizonte")
+        assertTrue(field.performClick())
+        assertTrue(field.showSoftInputOnFocus)
+        assertEquals(field.text.length, field.selectionStart)
+        field.onEditorAction(android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH)
+        assertFalse(field.showSoftInputOnFocus)
+    }
 }
