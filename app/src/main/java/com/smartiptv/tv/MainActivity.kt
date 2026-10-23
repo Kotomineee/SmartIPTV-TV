@@ -27,6 +27,8 @@ class MainActivity : Activity() {
     private var catalogJob: Future<*>? = null
     private var accountJob: Future<*>? = null
     private var generation = 0
+    private var contentRequest = 0
+    private var pendingEpisode = false
     private var foreground = false
     private val handler = Handler(Looper.getMainLooper())
     private val accountPoll = object : Runnable {
@@ -67,7 +69,7 @@ class MainActivity : Activity() {
     }
     private fun showCatalog(client: XtreamApi, account: Account) {
         root.removeAllViews(); loginView?.password?.text?.clear(); loginView = null
-        val screen = CatalogView(this, database, jobs, client.credentials.account, images, ::openContent, ::options, ::refreshCatalog, ::logout)
+        val screen = CatalogView(this, database, jobs, client.credentials.account, images, ::openContent, ::options, ::refreshCatalog, ::logout, ::cancelPendingContent)
         catalogView = screen
         root.addView(screen, FrameLayout.LayoutParams(-1, -1)); screen.showAccount(account)
         screen.nav["home"]?.requestFocus()
@@ -107,11 +109,14 @@ class MainActivity : Activity() {
     }
     fun openContent(item: Content) {
         val client = api ?: return
+        cancelPendingContent()
         if (item.kind == "episode") {
+            pendingEpisode = true
             catalogView?.message("Carregando episódios…")
             val token = generation
+            val request = contentRequest
             val series = Content("series", item.seriesId, item.seriesName, item.categories, item.artwork, year = item.year)
-            jobs.run(work = { client.seriesInfo(series) }, done = { if (token == generation && playerView == null) { catalogView?.message(""); play(item, false, it.episodes) } }, failed = { if (token == generation) { catalogView?.message(""); play(item, false, emptyList()); toast("A lista dos próximos episódios está indisponível.") } })
+            jobs.run(work = { client.seriesInfo(series) }, done = { if (token == generation && request == contentRequest && playerView == null) { pendingEpisode = false; catalogView?.message(""); play(item, false, it.episodes) } }, failed = { if (token == generation && request == contentRequest && playerView == null) { pendingEpisode = false; catalogView?.message(""); play(item, false, emptyList()); toast("A lista dos próximos episódios está indisponível.") } })
             return
         }
         closeDetails()
@@ -123,6 +128,10 @@ class MainActivity : Activity() {
         catalog.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
         root.addView(detail, FrameLayout.LayoutParams(-1, -1))
         detail.post { if (details === detail) detail.watch.requestFocus() }
+    }
+    private fun cancelPendingContent() {
+        contentRequest++
+        if (pendingEpisode) { pendingEpisode = false; api?.cancelDetails(); catalogView?.message("") }
     }
     fun closeDetails() {
         details?.let { detail ->
@@ -167,6 +176,7 @@ class MainActivity : Activity() {
         immersive(); refreshAccount()
     }
     private fun logout() {
+        cancelPendingContent()
         ++generation; handler.removeCallbacks(accountPoll)
         playerView?.shutdown(); playerView = null; closeDetails()
         catalogJob?.cancel(true); catalogJob = null; accountJob?.cancel(true); accountJob = null
@@ -179,6 +189,7 @@ class MainActivity : Activity() {
     }
     @Deprecated("TV uses the hardware Back key")
     override fun onBackPressed() {
+        if (pendingEpisode) { cancelPendingContent(); return }
         if (details != null) { closeDetails(); return }
         playerView?.let { if (!it.back()) leavePlayer(); return }
         catalogView?.let { screen ->

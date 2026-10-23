@@ -39,12 +39,7 @@ jobs:
           profile: tv_1080p
           disable-animations: true
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back none
-          script: bash ./gradlew connectedDebugAndroidTest --console=plain
-      - name: Collect interface evidence
-        if: always()
-        run: |
-          mkdir -p artifacts/screenshots
-          adb pull /sdcard/Android/data/com.smartiptv.tv/files/screenshots artifacts/screenshots || true
+          script: bash .github/scripts/test-tv.sh
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -53,6 +48,7 @@ jobs:
             app/build/reports/
             app/build/outputs/androidTest-results/
             artifacts/screenshots/
+            artifacts/logcat.txt
       - uses: actions/upload-artifact@v4
         with:
           name: SmartIPTV-TV-unsigned

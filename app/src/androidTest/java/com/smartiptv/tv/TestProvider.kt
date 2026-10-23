@@ -31,8 +31,8 @@ class TestProvider(context: Context) : AutoCloseable {
         canvas.drawText("NOVOS", 24f, 286f, paint); canvas.drawText("CAMINHOS", 24f, 314f, paint)
         ByteArrayOutputStream().use { out -> bitmap.compress(Bitmap.CompressFormat.PNG, 100, out); bitmap.recycle(); out.toByteArray() }
     }
-    val url: String get() = server.url("/").toString().trimEnd('/')
-    val account: String get() = Credentials.validated(url, "demo", "demopass").account
+    val url: String
+    val account: String
     init {
         server.dispatcher = object : Dispatcher() {
             override fun dispatch(request: RecordedRequest): MockResponse {
@@ -56,6 +56,9 @@ class TestProvider(context: Context) : AutoCloseable {
             }
         }
         server.start()
+        // Resolve the fixture host on the instrumentation thread, never in a UI assertion.
+        url = server.url("/").toString().trimEnd('/')
+        account = Credentials.validated(url, "demo", "demopass").account
     }
     private fun json(value: Any): MockResponse = MockResponse().setHeader("Content-Type", "application/json").setBody(value.toString())
     private fun payload(action: String): Any = when {

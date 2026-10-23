@@ -87,6 +87,8 @@ class CatalogAdapter(
         }
         fun bind(value: CardData?) {
             card = value
+            val height = tile.context.dp(if (live) 151 else 217)
+            if (tile.layoutParams.height != height) tile.layoutParams = tile.layoutParams.apply { this.height = height }
             images.clear(tile.poster)
             tile.title.text = value?.item?.name ?: "Carregando…"
             tile.description.text = value?.item?.let { if (it.kind == "episode") "T${it.season} · E${it.episode}" else it.year.ifEmpty { if (it.kind == "live") "AO VIVO" else "" } } ?: ""

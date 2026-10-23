@@ -23,6 +23,7 @@ class CatalogView(
     context: Context, private val db: LibraryDb, private val jobs: Jobs, private val accountKey: String,
     val images: ArtworkLoader, private val open: (Content) -> Unit, private val options: (Content) -> Unit,
     private val refresh: () -> Unit, private val logout: () -> Unit,
+    private val beforeNavigate: () -> Unit = {},
 ) : LinearLayout(context) {
     private val navigation = listOf("home" to "Início", "live" to "TV ao vivo", "movie" to "Filmes", "series" to "Séries", "continue" to "Continuar assistindo", "favorites" to "Favoritos")
     val nav = linkedMapOf<String, Button>()
@@ -138,6 +139,7 @@ class CatalogView(
     fun message(text: String, error: Boolean = false) { status.text = text; status.setTextColor(if (error) Palette.error else Palette.green); status.visibility = if (text.isBlank()) GONE else VISIBLE }
     fun refreshing(value: Boolean) { refreshButton.isEnabled = !value; refreshButton.text = if (value) "Atualizando…" else "Atualizar conteúdos" }
     fun navigate(next: String) {
+        beforeNavigate()
         if (next != tab) {
             restoreGrid = null; restoreCategory = null; restoreHomeY = 0; restoreHomeRows = emptyList()
             queryEpoch++; images.switchScreen(); adapter.reset()
