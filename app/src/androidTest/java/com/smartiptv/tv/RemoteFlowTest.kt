@@ -41,6 +41,13 @@ class RemoteFlowTest {
     }
     @After fun cleanup() { device.executeShellCommand("wm size reset"); scenario.close(); provider.close() }
     private fun ui(action: (MainActivity) -> Unit) { scenario.onActivity(action) }
+    private fun focusedGridPosition(activity: MainActivity): Int? = activity.currentFocus?.let { activity.catalogView?.grid?.findContainingViewHolder(it)?.absoluteAdapterPosition }
+    private fun selectGridPosition(position: Int) {
+        ui { it.catalogView!!.grid.scrollToPosition(position) }
+        waitFor("Card $position did not bind") { (it.catalogView!!.grid.findViewHolderForAdapterPosition(position) as? CatalogAdapter.Holder)?.card != null && it.catalogView!!.grid.isShown }
+        ui { assertTrue(it.catalogView!!.grid.findViewHolderForAdapterPosition(position)!!.itemView.requestFocus()) }
+        waitFor("Card $position did not receive focus") { focusedGridPosition(it) == position }
+    }
     private fun waitFor(description: String, timeout: Long = 20000, condition: (MainActivity) -> Boolean) {
         android.util.Log.i("SmartIPTVTest", "Waiting: $description")
         val deadline = SystemClock.uptimeMillis() + timeout
@@ -151,8 +158,9 @@ class RemoteFlowTest {
         device.pressDPadDown()
         waitFor("D-pad did not move to username") { it.loginView!!.username.hasFocus() }
         login()
+        navigate("home")
         waitFor("Visible artwork did not load") { it.images.memoryBytes > 0 }
-        capture("02-inicio")
+        capture("02-novidades")
 
         // Enter the selected content area with Right and open it with OK.
         navigate("movie")
@@ -497,6 +505,106 @@ class RemoteFlowTest {
         capture("22-favorites-sections-720p")
         ui { assertTrue(it.images.memoryBytes <= 6 * 1024 * 1024); assertTrue(it.images.pendingCount <= 48) }
         device.executeShellCommand("wm size reset")
+    }
+
+    @Test fun favoritesOpenFirstAndNovidadesPreservesTheFormerHomeContent() {
+        login()
+        ui { activity ->
+            val screen = activity.catalogView!!
+            assertEquals("favorites", screen.tab)
+            assertEquals(listOf("favorites", "live", "movie", "series", "continue", "home", "settings"), screen.nav.keys.toList())
+            assertEquals("Favoritos", screen.nav.getValue("favorites").text.toString())
+            assertEquals("Novidades", screen.nav.getValue("home").text.toString())
+            assertTrue(screen.nav.getValue("favorites").hasFocus())
+            assertTrue(screen.nav.values.none { it.text.toString() == "Início" })
+            activity.database.toggleFavorite(provider.account, activity.database.page(provider.account, "movie", limit = 1).items.single())
+            activity.database.toggleFavorite(provider.account, activity.database.page(provider.account, "series", limit = 1).items.single())
+            screen.reload()
+        }
+        waitFor("Default Favorites did not display stored contents") { it.catalogView!!.count.text.toString() == "2 conteúdos" && it.catalogView!!.grid.adapter?.itemCount == 4 }
+        capture("24-favorites-default-start")
+        navigate("home")
+        waitFor("Novidades artwork did not load") { it.images.memoryBytes > 0 }
+        ui { it.catalogView!!.focusContent() }
+        waitFor("Novidades did not retain its content shelves") { (it.currentFocus as? CatalogAdapter.Tile)?.title?.text?.toString() == "Além do horizonte" }
+        capture("25-novidades-menu-order")
+        device.pressBack()
+        waitFor("Back did not return to Favorites") { it.catalogView?.tab == "favorites" && it.catalogView!!.nav.getValue("favorites").hasFocus() }
+        navigate("home")
+        scenario.close(); scenario = ActivityScenario.launch(MainActivity::class.java)
+        waitFor("Remembered session did not start on Favorites") { it.catalogView?.tab == "favorites" && it.catalogView!!.count.text.toString() == "2 conteúdos" }
+        ui { assertTrue(it.catalogView!!.nav.getValue("favorites").hasFocus()); assertEquals(2, it.database.page(provider.account, "favorites").total) }
+    }
+
+    @Test fun directionalCatalogNavigationDoesNotWrapAcrossRowsOrFavoriteSections() {
+        login()
+        ui { activity ->
+            val db = activity.database
+            db.toggleFavorite(provider.account, db.page(provider.account, "movie", limit = 1).items.single())
+            db.page(provider.account, "series", limit = 4).items.forEach { db.toggleFavorite(provider.account, it) }
+            activity.catalogView!!.reload()
+        }
+        fun expectPosition(position: Int) = waitFor("Directional focus did not reach card $position") { focusedGridPosition(it) == position }
+        for (size in listOf("1920x1080", "1280x720")) {
+            device.executeShellCommand("wm size $size")
+            val width = size.substringBefore('x').toInt()
+            waitFor("Directional display did not resize: $size") { it.window.decorView.width == width }
+            if (size == "1280x720") navigate("favorites")
+            waitFor("Video fixture Favorites did not load") { it.catalogView!!.count.text.toString() == "5 conteúdos" && it.catalogView!!.grid.adapter?.itemCount == 7 }
+            selectGridPosition(1)
+            device.pressDPadRight()
+            waitFor("Right from the lone movie wrapped into series instead of ordering") { it.catalogView!!.order.hasFocus() }
+            repeat(2) { device.pressDPadRight() }
+            ui { assertTrue("Right at the toolbar edge moved down", it.catalogView!!.order.hasFocus()) }
+            capture("26-directional-right-$size")
+            device.pressDPadUp(); waitFor("Up from ordering did not reach search") { it.catalogView!!.search.hasFocus() }
+            device.pressDPadDown(); waitFor("Down from search did not reach ordering") { it.catalogView!!.order.hasFocus() }
+            device.pressDPadLeft(); expectPosition(1)
+            device.pressDPadUp(); waitFor("Up from the first movie did not reach search") { it.catalogView!!.search.hasFocus() }
+            device.pressDPadLeft(); waitFor("Left from search did not reach the current sidebar tab") { it.catalogView!!.nav.getValue("favorites").hasFocus() }
+            device.pressDPadRight(); expectPosition(1)
+            device.pressDPadDown(); expectPosition(3)
+            device.pressDPadUp(); expectPosition(1)
+            device.pressDPadLeft(); waitFor("Left from the movie did not reach Favorites sidebar") { it.catalogView!!.nav.getValue("favorites").hasFocus() }
+            device.pressDPadDown(); waitFor("Sidebar Down did not follow menu order") { it.catalogView!!.nav.getValue("live").hasFocus() }
+            device.pressDPadUp(); waitFor("Sidebar Up did not return to Favorites") { it.catalogView!!.nav.getValue("favorites").hasFocus() }
+
+            navigate("movie")
+            waitFor("Directional movie columns did not settle") {
+                val grid = it.catalogView!!.grid
+                !grid.isLayoutRequested && (grid.layoutManager as androidx.recyclerview.widget.GridLayoutManager).spanCount == (grid.width / it.dp(128)).coerceIn(2, 8)
+            }
+            val columns = AtomicReference(0)
+            ui { columns.set((it.catalogView!!.grid.layoutManager as androidx.recyclerview.widget.GridLayoutManager).spanCount) }
+            selectGridPosition(columns.get() - 1)
+            device.pressDPadRight(); waitFor("Right at a complete row wrapped to the next row") { it.catalogView!!.order.hasFocus() }
+            device.pressDPadLeft(); expectPosition(columns.get() - 1)
+            device.pressDPadDown(); expectPosition(columns.get() * 2 - 1)
+            device.pressDPadLeft(); expectPosition(columns.get() * 2 - 2)
+            selectGridPosition(60)
+            device.pressDPadDown(); expectPosition(60 + columns.get())
+            device.pressDPadUp(); expectPosition(60)
+            selectGridPosition(119)
+            device.pressDPadDown(); expectPosition(119)
+            device.pressDPadRight(); waitFor("Right at the last catalog item did not reach ordering") { it.catalogView!!.order.hasFocus() }
+            device.pressDPadLeft(); expectPosition(119)
+            capture("27-directional-paged-grid-$size")
+        }
+        device.executeShellCommand("wm size reset")
+        navigate("home")
+        waitFor("Directional Novidades shelf did not load") { it.images.memoryBytes > 0 }
+        focusDescription("Ver todos os filmes"); device.pressDPadUp()
+        waitFor("Novidades link Up did not reach search") { it.catalogView!!.search.hasFocus() }
+        device.pressDPadDown()
+        waitFor("Search Down did not reach the Novidades link below it") { it.currentFocus?.contentDescription?.toString() == "Ver todos os filmes" }
+        device.pressDPadDown()
+        waitFor("Novidades link Down did not reach its movie shelf") { it.currentFocus is CatalogAdapter.Tile }
+        val gallery = AtomicReference<androidx.recyclerview.widget.RecyclerView>()
+        ui { gallery.set(it.currentFocus!!.parent as androidx.recyclerview.widget.RecyclerView); gallery.get().scrollToPosition(17) }
+        waitFor("Last Novidades shelf card did not bind") { (gallery.get().findViewHolderForAdapterPosition(17) as? CatalogAdapter.Holder)?.card != null }
+        ui { gallery.get().findViewHolderForAdapterPosition(17)!!.itemView.requestFocus() }
+        device.pressDPadRight()
+        waitFor("Novidades shelf edge wrapped down into series") { it.currentFocus?.contentDescription?.toString() == "Ver todos os filmes" }
     }
 
     @Test fun episodeExitRestoresSameSeasonAndEpisodeWithPersistentResumeTime() {

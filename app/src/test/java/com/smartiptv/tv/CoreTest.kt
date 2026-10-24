@@ -102,6 +102,51 @@ class CoreTest {
         assertEquals(0, db.page(account, "movie", search = "%' OR 1=1 --").total)
         assertEquals(0, db.page(account, "movie", search = "_").total)
     }
+    @Test fun horizontalFocusNeverWrapsIntoAnotherRowOrSection() {
+        val sections = listOf(FocusSection(1, 1), FocusSection(3, 4))
+        assertNull(GridFocus.target(1, 4, sections, android.view.View.FOCUS_RIGHT))
+        assertNull(GridFocus.target(1, 4, sections, android.view.View.FOCUS_LEFT))
+        assertEquals(4, GridFocus.target(3, 4, sections, android.view.View.FOCUS_RIGHT))
+        assertEquals(3, GridFocus.target(4, 4, sections, android.view.View.FOCUS_LEFT))
+        assertNull(GridFocus.target(6, 4, sections, android.view.View.FOCUS_RIGHT))
+        val grid = listOf(FocusSection(0, 11))
+        assertNull(GridFocus.target(3, 4, grid, android.view.View.FOCUS_RIGHT))
+        assertNull(GridFocus.target(4, 4, grid, android.view.View.FOCUS_LEFT))
+        assertNull(GridFocus.target(10, 4, grid, android.view.View.FOCUS_RIGHT))
+    }
+    @Test fun verticalFocusSkipsHeadersAndPreservesTheNearestColumn() {
+        val sections = listOf(FocusSection(1, 1), FocusSection(3, 7), FocusSection(11, 1))
+        assertEquals(3, GridFocus.target(1, 4, sections, android.view.View.FOCUS_DOWN))
+        assertEquals(1, GridFocus.target(6, 4, sections, android.view.View.FOCUS_UP))
+        assertEquals(9, GridFocus.target(6, 4, sections, android.view.View.FOCUS_DOWN))
+        assertEquals(11, GridFocus.target(8, 4, sections, android.view.View.FOCUS_DOWN))
+        assertEquals(7, GridFocus.target(11, 4, sections, android.view.View.FOCUS_UP))
+        assertNull(GridFocus.target(1, 4, sections, android.view.View.FOCUS_UP))
+        assertNull(GridFocus.target(11, 4, sections, android.view.View.FOCUS_DOWN))
+    }
+    @Test fun focusRespectsDifferentColumnCountsAndPartiallyFilledRows() {
+        for (columns in 2..8) {
+            val sections = listOf(FocusSection(0, columns * 3 + 1))
+            assertEquals(columns * 3, GridFocus.target(columns * 3 - 1, columns, sections, android.view.View.FOCUS_DOWN))
+            assertEquals(columns * 2, GridFocus.target(columns * 3, columns, sections, android.view.View.FOCUS_UP))
+            assertNull(GridFocus.target(columns * 3, columns, sections, android.view.View.FOCUS_RIGHT))
+        }
+    }
+    @Test fun focusRejectsHeadingsMissingPositionsAndEmptySections() {
+        val sections = listOf(FocusSection(1, 1), FocusSection(3, 0), FocusSection(4, 1))
+        assertNull(GridFocus.target(0, 4, sections, android.view.View.FOCUS_DOWN))
+        assertNull(GridFocus.target(2, 4, sections, android.view.View.FOCUS_DOWN))
+        assertEquals(4, GridFocus.target(1, 4, sections, android.view.View.FOCUS_DOWN))
+        assertNull(GridFocus.target(0, 0, sections, android.view.View.FOCUS_DOWN))
+        assertNull(GridFocus.target(0, 4, emptyList(), android.view.View.FOCUS_DOWN))
+    }
+    @Test fun focusMovesBeyondTheFirstPageWithoutWrappingAtTheEndOfTheCatalog() {
+        val sections = listOf(FocusSection(0, 20000))
+        assertEquals(44, GridFocus.target(39, 5, sections, android.view.View.FOCUS_DOWN))
+        assertEquals(39, GridFocus.target(44, 5, sections, android.view.View.FOCUS_UP))
+        assertNull(GridFocus.target(19999, 5, sections, android.view.View.FOCUS_RIGHT))
+        assertNull(GridFocus.target(19999, 5, sections, android.view.View.FOCUS_DOWN))
+    }
     @Test fun homeSearchIncludesMoviesSeriesAndLive() {
         store(listOf(movie)); store(listOf(series.copy(name = "Além das cidades")), "series")
         assertEquals(2, db.searchAll(account, "alem", false, 0, 40).total)

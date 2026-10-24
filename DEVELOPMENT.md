@@ -68,3 +68,13 @@ resuming with OK, persistent progress, catalog Back navigation and 720p/1080p.
 
 Publishing is performed manually through Kotomineee's authenticated account,
 with a version title and assets only. GitHub Actions does not publish releases.
+
+The catalog opens on Favorites for new and remembered sessions. Favorites is the
+first sidebar entry; the former Home is labeled Novidades in Favorites' old slot.
+Back from other catalog tabs returns to Favorites. Their contents remain unchanged.
+Directional navigation uses card rows and section ranges rather than allowing
+horizontal focus to wrap into another row. Right at a row edge reaches ordering,
+Up above the first card row reaches search, and Down crosses headings into the
+next content row. Pending focus survives recycled/offscreen card layout without
+database work during a remote event. The native keyboard retains editing keys.
+Sidebar, categories, toolbars and Novidades shelves have explicit edge behavior.

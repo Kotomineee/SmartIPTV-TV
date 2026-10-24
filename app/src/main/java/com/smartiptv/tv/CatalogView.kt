@@ -3,6 +3,7 @@ package com.smartiptv.tv
 import android.content.Context
 import android.graphics.Color
 import android.view.Gravity
+import android.view.KeyEvent
 import android.view.View
 import android.view.ViewGroup
 import android.view.inputmethod.InputMethodManager
@@ -27,9 +28,10 @@ class CatalogView(
     private val refresh: () -> Unit, private val logout: () -> Unit,
     private val beforeNavigate: () -> Unit = {},
 ) : LinearLayout(context) {
-    private val navigation = listOf("home" to "Início", "live" to "TV ao vivo", "movie" to "Filmes", "series" to "Séries", "continue" to "Continuar assistindo", "favorites" to "Favoritos")
+    companion object { const val START_TAB = "favorites" }
+    private val navigation = listOf("favorites" to "Favoritos", "live" to "TV ao vivo", "movie" to "Filmes", "series" to "Séries", "continue" to "Continuar assistindo", "home" to "Novidades")
     val nav = linkedMapOf<String, Button>()
-    var tab = "home"; private set
+    var tab = START_TAB; private set
     private var category = ""
     private var alphabetical = false
     private var queryEpoch = 0
@@ -38,6 +40,8 @@ class CatalogView(
     private var restoreHomeY = 0
     private var restoreHomeRows = emptyList<android.os.Parcelable?>()
     private var focusAfterLoad = false
+    private var pendingGridFocus: Int? = null
+    private var lastGridPosition = 0
     private val handler = android.os.Handler(android.os.Looper.getMainLooper())
     private var searchTask: Runnable? = null
     private val queries = mutableListOf<Future<*>>()
@@ -46,7 +50,7 @@ class CatalogView(
     private val updateCatalog = Runnable {
         if (isShown && descendantFocusability != FOCUS_BLOCK_DESCENDANTS) { catalogPending = false; reload() }
     }
-    private val heading = context.text("Início", 25f, bold = true)
+    private val heading = context.text("Favoritos", 25f, bold = true)
     private val subtitle = context.text("", 11f, Palette.muted)
     private val status = context.text("", 11f, Palette.green)
     private val main = context.column()
@@ -66,6 +70,7 @@ class CatalogView(
     private val home = ScrollView(context).apply { isFillViewport = false }
     private val homeBody = context.column()
     private val homeRows = mutableListOf<Pair<RecyclerView, CatalogAdapter>>()
+    private val homeLinks = mutableListOf<Button>()
     private val settings = context.column()
     private val accountExpiration = context.text("Vencimento: —", 10f, Palette.muted)
     private val accountConnections = context.text("Conexões ativas: —", 10f, Palette.muted)
@@ -141,9 +146,10 @@ class CatalogView(
             favoriteSections.forEach { it.cards.reloadPosters() }
         }
         grid.viewTreeObserver.addOnGlobalLayoutListener {
+            completeGridFocus()
             // A section reload may replace every child after its query callback.
             // Keep the focus request until a visible card actually accepts it.
-            if (focusAfterLoad && grid.isShown && descendantFocusability != FOCUS_BLOCK_DESCENDANTS) {
+            if (pendingGridFocus == null && focusAfterLoad && grid.isShown && descendantFocusability != FOCUS_BLOCK_DESCENDANTS) {
                 focusAfterLoad = !focusContent()
             }
         }
@@ -159,9 +165,9 @@ class CatalogView(
         nav.values.forEach { button ->
             button.nextFocusRightId = search.id
         }
-        search.nextFocusLeftId = nav.getValue("home").id
+        search.nextFocusLeftId = nav.getValue(START_TAB).id
         home.setOnScrollChangeListener { _, _, _, _, _ -> homeRows.forEach { it.second.reloadPosters() } }
-        navigate("home")
+        navigate(START_TAB)
     }
 
     fun showAccount(account: Account) {
@@ -173,11 +179,12 @@ class CatalogView(
     fun refreshing(value: Boolean) { refreshButton.isEnabled = !value; refreshButton.text = if (value) "Atualizando…" else "Atualizar conteúdos" }
     fun navigate(next: String) {
         focusAfterLoad = false
+        pendingGridFocus = null; lastGridPosition = 0
         beforeNavigate()
         if (next != tab) {
             restoreGrid = null; restoreCategory = null; restoreHomeY = 0; restoreHomeRows = emptyList()
             queryEpoch++; images.switchScreen(); adapter.reset()
-            homeRows.forEach { it.first.adapter = null; it.second.reset() }; homeRows.clear(); homeBody.removeAllViews()
+            homeRows.forEach { it.first.adapter = null; it.second.reset() }; homeRows.clear(); homeLinks.clear(); homeBody.removeAllViews()
             favoriteSections.forEach { it.cards.reset() }; favoriteSections.clear()
             grid.adapter = adapter
             grid.recycledViewPool.clear(); category = ""
@@ -195,6 +202,7 @@ class CatalogView(
             else -> "Personalize sua experiência no SmartIPTV."
         }
         search.visibility = if (tab == "settings") GONE else VISIBLE
+        search.nextFocusLeftId = nav.getValue(tab).id
         updateOrder(); render()
     }
     private fun updateOrder() { order.text = if (alphabetical) "Nome A–Z" else if (tab == "continue") "Assistidos recentemente" else "Mais recentes" }
@@ -238,7 +246,7 @@ class CatalogView(
         if (items.isEmpty()) return
         query(work = { db.cards(accountKey, Page(items, items.size)).cards.associateBy { it.item.uid } }, done = { values -> if (current == queryEpoch) adapters.forEach { it.updateIndicators(values) } })
     }
-    private fun cancelQueries() { querySerial++; queries.forEach { it.cancel(false) }; queries.clear() }
+    private fun cancelQueries() { pendingGridFocus = null; lastGridPosition = 0; querySerial++; queries.forEach { it.cancel(false) }; queries.clear() }
     private fun <T> query(work: () -> T, done: (T) -> Unit, failed: (String) -> Unit = {}) {
         queries.removeAll { it.isDone }
         val serial = querySerial
@@ -257,20 +265,134 @@ class CatalogView(
         val card = if (grid.isShown) (0 until grid.childCount).map { grid.getChildAt(it) }.firstOrNull { it.isFocusable } else null
         return card?.requestFocus() ?: if (!focusAfterLoad || count.text.toString().startsWith("0 ")) search.requestFocus() else false
     }
-    override fun dispatchKeyEvent(event: android.view.KeyEvent): Boolean {
-        if (event.action == android.view.KeyEvent.ACTION_DOWN) {
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (event.action == KeyEvent.ACTION_DOWN) {
             focusAfterLoad = false
-            if (event.keyCode == android.view.KeyEvent.KEYCODE_DPAD_RIGHT && nav.values.any { it.hasFocus() }) { focusContent(); return true }
-            if (event.keyCode == android.view.KeyEvent.KEYCODE_DPAD_LEFT && grid.hasFocus()) {
-                val holder = grid.findContainingViewHolder(grid.findFocus() ?: grid)
-                val manager = grid.layoutManager as GridLayoutManager
-                if (holder != null && manager.spanSizeLookup.getSpanIndex(holder.absoluteAdapterPosition.coerceAtLeast(0), manager.spanCount) == 0) {
-                    if (categories.visibility == VISIBLE) categories.getChildAt(0)?.requestFocus() ?: nav[tab]?.requestFocus() else nav[tab]?.requestFocus()
-                    return true
-                }
+            val direction = when (event.keyCode) {
+                KeyEvent.KEYCODE_DPAD_LEFT -> FOCUS_LEFT; KeyEvent.KEYCODE_DPAD_RIGHT -> FOCUS_RIGHT
+                KeyEvent.KEYCODE_DPAD_UP -> FOCUS_UP; KeyEvent.KEYCODE_DPAD_DOWN -> FOCUS_DOWN
+                else -> null
             }
+            if (direction != null && moveFocus(direction)) return true
         }
         return super.dispatchKeyEvent(event)
+    }
+    private fun focusSidebar() { pendingGridFocus = null; nav[tab]?.requestFocus() }
+    private fun focusToolbar(view: View) { pendingGridFocus = null; if (view.isShown) view.requestFocus() }
+    private fun gridSections(): List<FocusSection> {
+        if (tab != "favorites") return listOf(FocusSection(0, adapter.itemCount))
+        var offset = 0
+        return favoriteSections.map { section -> FocusSection(offset + 1, section.cards.itemCount).also { offset += 1 + section.cards.itemCount } }
+    }
+    private fun focusGrid(position: Int) {
+        if (position !in 0 until (grid.adapter?.itemCount ?: 0)) return
+        pendingGridFocus = position; lastGridPosition = position
+        if (!completeGridFocus()) { grid.stopScroll(); grid.scrollToPosition(position); grid.post { completeGridFocus() } }
+    }
+    private fun completeGridFocus(): Boolean {
+        val position = pendingGridFocus ?: return false
+        if (!grid.isShown || descendantFocusability == FOCUS_BLOCK_DESCENDANTS) return false
+        val row = grid.findViewHolderForAdapterPosition(position)?.itemView ?: return false
+        if (!row.isFocusable || !row.requestFocus()) return false
+        pendingGridFocus = null
+        return true
+    }
+    private fun returnToGrid() {
+        if (grid.isShown && (grid.adapter?.itemCount ?: 0) > 0) {
+            val sections = gridSections()
+            val position = lastGridPosition.takeIf { value -> sections.any { value >= it.first && value - it.first < it.count } } ?: sections.firstOrNull()?.first
+            if (position != null) focusGrid(position)
+        }
+    }
+    private fun moveFocus(direction: Int): Boolean {
+        val focused = findFocus() ?: return false
+        if (grid.hasFocus()) {
+            val holder = grid.findContainingViewHolder(focused) ?: return true
+            val position = pendingGridFocus ?: holder.absoluteAdapterPosition
+            if (position < 0) return true
+            lastGridPosition = position
+            val columns = (grid.layoutManager as GridLayoutManager).spanCount
+            val target = GridFocus.target(position, columns, gridSections(), direction)
+            if (target != null) focusGrid(target)
+            else when (direction) {
+                FOCUS_LEFT -> { pendingGridFocus = null; if (categories.isShown) categories.getChildAt(0)?.requestFocus() ?: focusSidebar() else focusSidebar() }
+                FOCUS_RIGHT -> focusToolbar(if (order.isShown) order else search)
+                FOCUS_UP -> focusToolbar(search)
+                FOCUS_DOWN -> pendingGridFocus = null
+            }
+            return true
+        }
+        if (search.hasFocus()) {
+            // Once OK opens the keyboard, editing remains owned by the native input.
+            if (search.showSoftInputOnFocus) return false
+            when (direction) { FOCUS_LEFT -> focusSidebar(); FOCUS_DOWN -> if (order.isShown) focusToolbar(order) else if (home.isShown) homeLinks.firstOrNull()?.requestFocus() else focusContent() }
+            return true
+        }
+        if (order.hasFocus()) {
+            when (direction) { FOCUS_UP -> focusToolbar(search); FOCUS_LEFT -> if (grid.isShown) returnToGrid() else focusSidebar(); FOCUS_DOWN -> returnToGrid() }
+            return true
+        }
+        val sidebar = nav.values.toList()
+        val navIndex = sidebar.indexOfFirst { it.hasFocus() }
+        if (navIndex >= 0) {
+            pendingGridFocus = null
+            when (direction) {
+                FOCUS_RIGHT -> focusContent()
+                FOCUS_UP -> sidebar.getOrNull(navIndex - 1)?.requestFocus()
+                FOCUS_DOWN -> sidebar.getOrNull(navIndex + 1)?.requestFocus()
+            }
+            return true
+        }
+        if (categories.hasFocus()) {
+            val position = categories.findContainingViewHolder(focused)?.absoluteAdapterPosition ?: return true
+            when (direction) {
+                FOCUS_LEFT -> focusSidebar()
+                FOCUS_RIGHT -> returnToGrid()
+                FOCUS_UP -> if (position == 0) focusToolbar(search) else return false
+                FOCUS_DOWN -> if (position + 1 < (categories.adapter?.itemCount ?: 0)) return false
+            }
+            return true
+        }
+        if (settings.hasFocus()) {
+            val buttons = listOf(nextButton, refreshButton, logoutButton)
+            val index = buttons.indexOfFirst { it.hasFocus() }
+            when (direction) { FOCUS_LEFT -> focusSidebar(); FOCUS_UP -> buttons.getOrNull(index - 1)?.requestFocus(); FOCUS_DOWN -> buttons.getOrNull(index + 1)?.requestFocus() }
+            return true
+        }
+        return moveHomeFocus(focused, direction)
+    }
+    private fun focusHomeRow(index: Int, origin: View) {
+        val gallery = homeRows.getOrNull(index)?.first ?: return
+        val source = IntArray(2); origin.getLocationOnScreen(source)
+        val center = source[0] + origin.width / 2
+        val card = (0 until gallery.childCount).map { gallery.getChildAt(it) }.filter { it.isFocusable }.minByOrNull {
+            val point = IntArray(2); it.getLocationOnScreen(point)
+            kotlin.math.abs(point[0] + it.width / 2 - center)
+        }
+        card?.requestFocus() ?: homeLinks.getOrNull(index)?.requestFocus()
+    }
+    private fun moveHomeFocus(focused: View, direction: Int): Boolean {
+        if (!home.isShown) return false
+        val link = homeLinks.indexOfFirst { it.hasFocus() }
+        if (link >= 0) {
+            when (direction) {
+                FOCUS_LEFT -> focusSidebar()
+                FOCUS_UP -> if (link == 0) focusToolbar(search) else homeLinks[link - 1].requestFocus()
+                FOCUS_DOWN -> focusHomeRow(link, focused)
+            }
+            return true
+        }
+        val row = homeRows.indexOfFirst { it.first.hasFocus() }
+        if (row < 0) return false
+        val gallery = homeRows[row].first
+        val holder = gallery.findContainingViewHolder(focused) ?: return true
+        when (direction) {
+            FOCUS_LEFT -> if (holder.absoluteAdapterPosition == 0) focusSidebar() else return false
+            FOCUS_RIGHT -> if (holder.absoluteAdapterPosition + 1 == (gallery.adapter?.itemCount ?: 0)) homeLinks[row].requestFocus() else return false
+            FOCUS_UP -> if (row == 0) focusToolbar(search) else focusHomeRow(row - 1, focused)
+            FOCUS_DOWN -> if (row + 1 < homeRows.size) focusHomeRow(row + 1, focused)
+        }
+        return true
     }
     private fun cards(page: Page): CardPage = db.cards(accountKey, page)
     private fun loadPage(offset: Int, limit: Int, done: (CardPage) -> Unit) {
@@ -337,7 +459,7 @@ class CatalogView(
     private fun buildHome() {
         cancelQueries()
         queryEpoch++; val current = queryEpoch
-        homeRows.forEach { it.first.adapter = null }; homeRows.clear(); homeBody.removeAllViews()
+        homeRows.forEach { it.first.adapter = null }; homeRows.clear(); homeLinks.clear(); homeBody.removeAllViews()
         val banner = context.column().apply { background = shape(Color.rgb(25, 48, 38), context.dp(11).toFloat()); pad(19, 17) }
         banner.addView(context.eyebrow("SEU CATÁLOGO, DO SEU JEITO")); banner.gap(8)
         banner.addView(context.text("O próximo play começa aqui.", 24f, bold = true)); banner.gap(7)
@@ -346,7 +468,11 @@ class CatalogView(
         for ((rowIndex, entry) in listOf("movie" to "Filmes recém-adicionados", "series" to "Séries atualizadas", "live" to "Canais recém-adicionados").withIndex()) {
             val (kind, title) = entry
             val row = context.row(); row.addView(context.text(title, 17f, bold = true), LayoutParams(0, -2, 1f))
-            row.addView(context.button("Ver todos →") { navigate(kind); focusContent() }, LayoutParams(-2, context.dp(35)))
+            val link = context.button("Ver todos →") { navigate(kind); focusContent() }.apply {
+                contentDescription = when (kind) { "movie" -> "Ver todos os filmes"; "series" -> "Ver todas as séries"; else -> "Ver todos os canais" }
+            }
+            homeLinks += link
+            row.addView(link, LayoutParams(-2, context.dp(35)))
             homeBody.addView(row); homeBody.gap(9)
             val gallery = RecyclerView(context).apply { layoutManager = LinearLayoutManager(context, RecyclerView.HORIZONTAL, false); itemAnimator = null; setItemViewCacheSize(1) }
             val galleryAdapter = CatalogAdapter(images, open, options, { offset, limit, done ->

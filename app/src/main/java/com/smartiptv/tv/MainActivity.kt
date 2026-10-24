@@ -76,7 +76,7 @@ class MainActivity : Activity() {
         val screen = CatalogView(this, database, jobs, client.credentials.account, images, ::openContent, ::options, { refreshCatalog(true) }, ::logout, ::cancelPendingContent)
         catalogView = screen
         root.addView(screen, FrameLayout.LayoutParams(-1, -1)); screen.showAccount(account)
-        screen.nav["home"]?.requestFocus()
+        screen.nav[CatalogView.START_TAB]?.requestFocus()
         refreshCatalog()
         handler.removeCallbacks(accountPoll); if (foreground) handler.postDelayed(accountPoll, 60000)
     }
@@ -228,7 +228,7 @@ class MainActivity : Activity() {
         playerView?.let { if (!it.back()) leavePlayer(); return }
         catalogView?.let { screen ->
             if (screen.search.text.isNotBlank()) { screen.search.text.clear(); return }
-            if (screen.tab != "home") { screen.navigate("home"); screen.nav["home"]?.requestFocus(); return }
+            if (screen.tab != CatalogView.START_TAB) { screen.navigate(CatalogView.START_TAB); screen.nav[CatalogView.START_TAB]?.requestFocus(); return }
         }
         @Suppress("DEPRECATION")
         super.onBackPressed()
