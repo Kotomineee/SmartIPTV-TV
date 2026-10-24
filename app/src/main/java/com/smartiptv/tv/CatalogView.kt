@@ -134,7 +134,6 @@ class CatalogView(
             }
         }
         grid.itemAnimator = null; grid.setHasFixedSize(true); grid.clipToPadding = false; grid.setItemViewCacheSize(2)
-        grid.isFocusable = true; grid.isFocusableInTouchMode = true
         grid.setPadding(context.dp(2), context.dp(2), context.dp(2), context.dp(8))
         adapter = CatalogAdapter(images, open, options, ::loadPage)
         grid.adapter = adapter
@@ -290,12 +289,6 @@ class CatalogView(
         pendingGridFocus = position; lastGridPosition = position
         if (!completeGridFocus()) {
             grid.stopScroll()
-            // Park focus on the list so its old child cannot pull an offscreen
-            // target back into the old viewport while the next row is laid out.
-            val policy = grid.descendantFocusability
-            grid.descendantFocusability = FOCUS_BLOCK_DESCENDANTS
-            grid.requestFocus()
-            grid.descendantFocusability = policy
             (grid.layoutManager as GridLayoutManager).scrollToPositionWithOffset(position, 0)
             grid.post { completeGridFocus() }
         }
@@ -324,7 +317,12 @@ class CatalogView(
             lastGridPosition = position
             val columns = (grid.layoutManager as GridLayoutManager).spanCount
             val target = GridFocus.target(position, columns, gridSections(), direction)
-            if (target != null) focusGrid(target)
+            if (target != null) {
+                // The native grid fills and scrolls offscreen vertical rows as
+                // part of focus search, retaining its column and child anchor.
+                if (direction == FOCUS_UP || direction == FOCUS_DOWN) return false
+                focusGrid(target)
+            }
             else when (direction) {
                 FOCUS_LEFT -> { pendingGridFocus = null; if (categories.isShown) categories.getChildAt(0)?.requestFocus() ?: focusSidebar() else focusSidebar() }
                 FOCUS_RIGHT -> focusToolbar(if (order.isShown) order else search)
