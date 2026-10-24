@@ -43,7 +43,7 @@ class RemoteFlowTest {
     private fun ui(action: (MainActivity) -> Unit) { scenario.onActivity(action) }
     private fun focusedGridPosition(activity: MainActivity): Int? = activity.currentFocus?.let { activity.catalogView?.grid?.findContainingViewHolder(it)?.absoluteAdapterPosition }
     private fun selectGridPosition(position: Int) {
-        ui { it.catalogView!!.grid.scrollToPosition(position) }
+        ui { it.catalogView!!.order.requestFocus(); it.catalogView!!.grid.scrollToPosition(position) }
         waitFor("Card $position did not bind") { (it.catalogView!!.grid.findViewHolderForAdapterPosition(position) as? CatalogAdapter.Holder)?.card != null && it.catalogView!!.grid.isShown }
         ui { assertTrue(it.catalogView!!.grid.findViewHolderForAdapterPosition(position)!!.itemView.requestFocus()) }
         waitFor("Card $position did not receive focus") { focusedGridPosition(it) == position }
@@ -581,10 +581,21 @@ class RemoteFlowTest {
             device.pressDPadLeft(); expectPosition(columns.get() - 1)
             device.pressDPadDown(); expectPosition(columns.get() * 2 - 1)
             device.pressDPadLeft(); expectPosition(columns.get() * 2 - 2)
-            selectGridPosition(60)
-            device.pressDPadDown(); expectPosition(60 + columns.get())
-            device.pressDPadUp(); expectPosition(60)
-            selectGridPosition(119)
+            var position = columns.get() * 2 - 2
+            // Reach another metadata page through real remote input, rather
+            // than a programmatic jump that keeps an unrelated child focused.
+            while (position < 60) {
+                position = minOf(position + columns.get(), 119)
+                device.pressDPadDown(); expectPosition(position)
+            }
+            waitFor("Paged directional card metadata did not load") { (it.catalogView!!.grid.findViewHolderForAdapterPosition(position) as? CatalogAdapter.Holder)?.card != null }
+            device.pressDPadUp(); expectPosition(position - columns.get())
+            device.pressDPadDown(); expectPosition(position)
+            while ((position / columns.get() + 1) * columns.get() < 120) {
+                position = minOf((position / columns.get() + 1) * columns.get() + position % columns.get(), 119)
+                device.pressDPadDown(); expectPosition(position)
+            }
+            while (position < 119) { position++; device.pressDPadRight(); expectPosition(position) }
             device.pressDPadDown(); expectPosition(119)
             device.pressDPadRight(); waitFor("Right at the last catalog item did not reach ordering") { it.catalogView!!.order.hasFocus() }
             device.pressDPadLeft(); expectPosition(119)
