@@ -599,6 +599,12 @@ class RemoteFlowTest {
             device.pressDPadDown(); expectPosition(119)
             device.pressDPadRight(); waitFor("Right at the last catalog item did not reach ordering") { it.catalogView!!.order.hasFocus() }
             device.pressDPadLeft(); expectPosition(119)
+            device.pressDPadUp(); expectPosition(119 - columns.get())
+            ui { activity -> repeat(6) {
+                activity.catalogView!!.dispatchKeyEvent(android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN, android.view.KeyEvent.KEYCODE_DPAD_DOWN))
+                activity.catalogView!!.dispatchKeyEvent(android.view.KeyEvent(android.view.KeyEvent.ACTION_UP, android.view.KeyEvent.KEYCODE_DPAD_DOWN))
+            } }
+            expectPosition(119)
             capture("27-directional-paged-grid-$size")
         }
         device.executeShellCommand("wm size reset")

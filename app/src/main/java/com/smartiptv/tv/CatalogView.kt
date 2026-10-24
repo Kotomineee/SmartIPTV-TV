@@ -319,7 +319,7 @@ class CatalogView(
         val focused = findFocus() ?: return false
         if (grid.hasFocus()) {
             val holder = grid.findContainingViewHolder(focused)
-            val position = pendingGridFocus ?: holder?.absoluteAdapterPosition ?: return true
+            val position = pendingGridFocus ?: holder?.absoluteAdapterPosition ?: run { focusContent(); return true }
             if (position < 0) return true
             lastGridPosition = position
             val columns = (grid.layoutManager as GridLayoutManager).spanCount
@@ -329,7 +329,7 @@ class CatalogView(
                 FOCUS_LEFT -> { pendingGridFocus = null; if (categories.isShown) categories.getChildAt(0)?.requestFocus() ?: focusSidebar() else focusSidebar() }
                 FOCUS_RIGHT -> focusToolbar(if (order.isShown) order else search)
                 FOCUS_UP -> focusToolbar(search)
-                FOCUS_DOWN -> pendingGridFocus = null
+                FOCUS_DOWN -> Unit
             }
             return true
         }
