@@ -269,7 +269,7 @@ class CatalogView(
     }
     private fun moveFocus(direction: Int): Boolean {
         val focused = findFocus() ?: return false
-        if (grid.hasFocus()) {
+        if (grid.hasFocus() || pendingGridFocus != null) {
             val holder = grid.findContainingViewHolder(focused)
             val position = pendingGridFocus ?: holder?.absoluteAdapterPosition ?: run { focusContent(); return true }
             if (position < 0) return true
@@ -277,9 +277,9 @@ class CatalogView(
             val columns = (grid.layoutManager as GridLayoutManager).spanCount
             val target = GridFocus.target(position, columns, gridSections(), direction)
             if (target != null) {
-                // The native grid fills and scrolls offscreen vertical rows as
-                // part of focus search, retaining its column and child anchor.
-                if (direction == FOCUS_UP || direction == FOCUS_DOWN) return false
+                // Keep one explicit destination while the next row/page is
+                // attached, so metadata updates cannot redirect focus outside
+                // the catalog during an offscreen vertical move.
                 focusGrid(target)
             }
             else when (direction) {

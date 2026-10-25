@@ -57,7 +57,12 @@ class RemoteFlowTest {
             if (result.get()) { android.util.Log.i("SmartIPTVTest", "Passed: $description"); return }
             SystemClock.sleep(80)
         }
-        ui { android.util.Log.e("SmartIPTVTest", "Window=${it.hasWindowFocus()} focus=${it.currentFocus?.contentDescription} login=${it.loginView?.feedback?.text}") }
+        ui { activity ->
+            val screen = activity.catalogView
+            val pending = screen?.let { CatalogView::class.java.getDeclaredField("pendingGridFocus").apply { isAccessible = true }.get(it) }
+            val positions = screen?.grid?.let { grid -> (0 until grid.childCount).map { grid.getChildAdapterPosition(grid.getChildAt(it)) } }
+            android.util.Log.e("SmartIPTVTest", "Window=${activity.hasWindowFocus()} focus=${activity.currentFocus?.javaClass?.simpleName}:${activity.currentFocus?.contentDescription} position=${focusedGridPosition(activity)} pending=$pending children=$positions tab=${screen?.tab} player=${activity.playerView != null} login=${activity.loginView?.feedback?.text}")
+        }
         capture("failure-" + description.replace(Regex("[^a-zA-Z0-9]"), "-"))
         throw AssertionError(description)
     }
@@ -405,6 +410,7 @@ class RemoteFlowTest {
         ui { it.playerView!!.engine!!.seekTo(it.playerView!!.engine!!.duration - 400); it.playerView!!.engine!!.play() }
         waitFor("Playback did not record episode completion", 12000) { "episode:101" in it.database.watchedEpisodes(provider.account, "4") }
         ui { it.leavePlayer() }
+        waitFor("Episode return transition did not finish") { it.playerView == null && it.details?.watch?.isEnabled == true }
         openSeries(); expectWatched(true)
         capture("13-episode-watched-1080p")
         ui { it.details!!.seasons.getChildAt(1).requestFocus() }; device.pressDPadCenter()
@@ -416,6 +422,7 @@ class RemoteFlowTest {
         ui { firstRow(it)!!.requestFocus() }; device.pressDPadCenter()
         waitFor("Completed episode could not be replayed") { it.playerView?.engine?.let { p -> p.playbackState == Player.STATE_READY && p.currentPosition > 1500 } == true }
         ui { it.leavePlayer() }
+        waitFor("Episode return transition did not finish") { it.playerView == null && it.details?.watch?.isEnabled == true }
         openSeries(); expectWatched(true)
         device.pressBack(); waitFor("Episode modal did not close") { it.details == null }
         scenario.close(); scenario = ActivityScenario.launch(MainActivity::class.java)
