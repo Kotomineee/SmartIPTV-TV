@@ -1,6 +1,7 @@
 package com.smartiptv.tv
 
 import android.content.Context
+import android.graphics.Rect
 import android.view.Gravity
 import android.view.KeyEvent
 import android.view.View
@@ -111,7 +112,10 @@ class CatalogView(
         tools.addView(count, LayoutParams(0, -2, 1f)); tools.addView(order, LayoutParams(-2, context.dp(36)))
         gridPage.addView(tools); gridPage.gap(10); gridPage.addView(results, LayoutParams(-1, 0, 1f))
         results.addView(grid, FrameLayout.LayoutParams(-1, -1)); results.addView(empty, FrameLayout.LayoutParams(-1, -1))
-        grid.layoutManager = GridLayoutManager(context, 4)
+        grid.layoutManager = object : GridLayoutManager(context, 4) {
+            override fun requestChildRectangleOnScreen(parent: RecyclerView, child: View, rect: Rect, immediate: Boolean, focusedChildVisible: Boolean): Boolean =
+                super.requestChildRectangleOnScreen(parent, child, rect, true, focusedChildVisible)
+        }
         grid.itemAnimator = null; grid.setHasFixedSize(true); grid.clipToPadding = false; grid.setItemViewCacheSize(2)
         grid.setPadding(context.dp(2), context.dp(2), context.dp(2), context.dp(8))
         adapter = CatalogAdapter(images, open, options, ::loadPage)
@@ -256,7 +260,14 @@ class CatalogView(
     private fun completeGridFocus(): Boolean {
         val position = pendingGridFocus ?: return false
         if (!grid.isShown || grid.isLayoutRequested || grid.isComputingLayout || descendantFocusability == FOCUS_BLOCK_DESCENDANTS) return false
-        val row = grid.findViewHolderForAdapterPosition(position)?.itemView ?: return false
+        val row = grid.findViewHolderForAdapterPosition(position)?.itemView ?: run {
+            // An older in-flight scroll can detach the intended row. Re-anchor
+            // it instead of leaving a pending destination outside the viewport.
+            grid.stopScroll()
+            (grid.layoutManager as GridLayoutManager).scrollToPositionWithOffset(position, 0)
+            grid.post { completeGridFocus() }
+            return false
+        }
         if (!row.isFocusable || !row.requestFocus()) return false
         // RecyclerView may restore its old focus later in this layout pass.
         // Confirm on the next frame before releasing the destination, and
