@@ -40,6 +40,7 @@ class CatalogView(
     private var restoreCategory: android.os.Parcelable? = null
     private var focusAfterLoad = false
     private var pendingGridFocus: Int? = null
+    private var focusCheckPosted = false
     private var lastGridPosition = 0
     private val handler = android.os.Handler(android.os.Looper.getMainLooper())
     private var searchTask: Runnable? = null
@@ -254,10 +255,20 @@ class CatalogView(
     }
     private fun completeGridFocus(): Boolean {
         val position = pendingGridFocus ?: return false
-        if (!grid.isShown || descendantFocusability == FOCUS_BLOCK_DESCENDANTS) return false
+        if (!grid.isShown || grid.isLayoutRequested || grid.isComputingLayout || descendantFocusability == FOCUS_BLOCK_DESCENDANTS) return false
         val row = grid.findViewHolderForAdapterPosition(position)?.itemView ?: return false
         if (!row.isFocusable || !row.requestFocus()) return false
-        pendingGridFocus = null
+        // RecyclerView may restore its old focus later in this layout pass.
+        // Confirm on the next frame before releasing the destination, and
+        // recover it if attaching/rebinding a page temporarily focused Back.
+        if (!focusCheckPosted) {
+            focusCheckPosted = true
+            grid.postOnAnimation {
+                focusCheckPosted = false
+                if (pendingGridFocus == position && row.hasFocus() && !grid.isLayoutRequested && !grid.isComputingLayout && grid.scrollState == RecyclerView.SCROLL_STATE_IDLE && !grid.hasPendingAdapterUpdates()) pendingGridFocus = null
+                else if (pendingGridFocus != null) completeGridFocus()
+            }
+        }
         return true
     }
     private fun returnToGrid() {
