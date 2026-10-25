@@ -78,3 +78,11 @@ Up above the first card row reaches search, and Down crosses headings into the
 next content row. Pending focus survives recycled/offscreen card layout without
 database work during a remote event. The native keyboard retains editing keys.
 Sidebar, categories, toolbars and Novidades shelves have explicit edge behavior.
+
+## 1.5.0
+
+- Login and remembered sessions open a lightweight three-choice gateway (live TV, series, movies). No catalog download or artwork request occurs until selection.
+- Every area starts on its own Favorites. The sidebar contains only its library and server categories. Movies and series have separate Continue Watching; live TV has no resume menu.
+- Refresh imports only the selected catalog. Leaving cancels that work, discards stale callbacks and releases artwork; existing account-scoped history and favorites remain compatible.
+- Back returns through Favorites to the gateway. Account details, refresh, logout and autoplay remain in Settings.
+- Native D-pad focus, paged grids, search keyboard, playback return, watched episodes and bounded image memory remain covered by tests.

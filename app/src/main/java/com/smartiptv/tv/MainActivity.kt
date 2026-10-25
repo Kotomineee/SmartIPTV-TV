@@ -21,6 +21,10 @@ class MainActivity : Activity() {
     private var api: XtreamApi? = null
     var loginView: LoginView? = null; private set
     var catalogView: CatalogView? = null; private set
+    var selectionView: ContentSelectionView? = null; private set
+    private var account: Account? = null
+    private var selectedKind = "live"
+    private var catalogEpoch = 0
     var details: DetailView? = null; private set
     var playerView: TvPlayer? = null; private set
     private var playbackSeries: Content? = null
@@ -56,7 +60,7 @@ class MainActivity : Activity() {
         window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_FULLSCREEN or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or View.SYSTEM_UI_FLAG_LAYOUT_STABLE
     }
     private fun showLogin() {
-        root.removeAllViews(); catalogView = null
+        root.removeAllViews(); catalogView = null; selectionView = null
         loginView = LoginView(this, vault, ::authenticate).also { root.addView(it, FrameLayout.LayoutParams(-1, -1)) }
     }
     private fun authenticate(credentials: Credentials, remember: Boolean) {
@@ -69,48 +73,60 @@ class MainActivity : Activity() {
             val account = client.authenticate()
             vault.remember(credentials, remember)
             account
-        }, done = { account -> if (token == generation) showCatalog(client, account) }, failed = { if (token == generation) loginView?.error(it) })
+        }, done = { account -> if (token == generation) showSelection(account) }, failed = { if (token == generation) loginView?.error(it) })
     }
-    private fun showCatalog(client: XtreamApi, account: Account) {
-        root.removeAllViews(); loginView?.password?.text?.clear(); loginView = null
-        val screen = CatalogView(this, database, jobs, client.credentials.account, images, ::openContent, ::options, { refreshCatalog(true) }, ::logout, ::cancelPendingContent)
+    private fun stopCatalogRefresh() {
+        catalogEpoch++; catalogJob?.cancel(true); catalogJob = null; api?.cancelCatalogs()
+    }
+    private fun showSelection(currentAccount: Account? = account) {
+        account = currentAccount
+        cancelPendingContent(); stopCatalogRefresh()
+        catalogView?.releasePosters(); root.removeAllViews(); catalogView = null
+        loginView?.password?.text?.clear(); loginView = null
+        selectionView = ContentSelectionView(this, selectedKind, ::showCatalog).also { root.addView(it, FrameLayout.LayoutParams(-1, -1)) }
+        handler.removeCallbacks(accountPoll); if (foreground) handler.postDelayed(accountPoll, 60000)
+    }
+    private fun showCatalog(kind: String) {
+        val client = api ?: return
+        if (kind !in listOf("live", "series", "movie")) return
+        selectedKind = kind
+        root.removeAllViews(); selectionView = null
+        val screen = CatalogView(this, database, jobs, client.credentials.account, images, ::openContent, ::options, { refreshCatalog(true) }, ::logout, ::cancelPendingContent, kind, { showSelection() })
         catalogView = screen
-        root.addView(screen, FrameLayout.LayoutParams(-1, -1)); screen.showAccount(account)
+        root.addView(screen, FrameLayout.LayoutParams(-1, -1)); account?.let(screen::showAccount)
         screen.nav[CatalogView.START_TAB]?.requestFocus()
         refreshCatalog()
-        handler.removeCallbacks(accountPoll); if (foreground) handler.postDelayed(accountPoll, 60000)
     }
     private fun refreshCatalog(force: Boolean = false) {
         val client = api ?: return
         val screen = catalogView ?: return
         if (catalogJob != null) return
         val token = generation
-        val priority = screen.tab
+        val refreshEpoch = ++catalogEpoch
+        val priority = screen.mediaKind
         screen.refreshing(true); screen.message("Atualizando catálogo em segundo plano…")
         catalogJob = jobs.run(refresh = true, work = {
-            CatalogSync(client, database, cacheDir).refresh(force, priority) { kind ->
+            CatalogSync(client, database, cacheDir).refresh(force, priority, only = priority) { kind ->
                 jobs.ui {
-                    if (token == generation) {
-                        if (screen.tab == "home" || screen.tab == kind) screen.catalogUpdated(playerView != null || details != null)
-                    }
+                    if (token == generation && refreshEpoch == catalogEpoch && catalogView === screen && kind == screen.mediaKind) screen.catalogUpdated(playerView != null || details != null)
                 }
             }
         }, done = { result ->
-            if (token == generation) {
+            if (token == generation && refreshEpoch == catalogEpoch && catalogView === screen) {
                 catalogJob = null; screen.refreshing(false)
                 screen.message(if (result.failed.isEmpty()) "" else "Algumas seções não puderam ser atualizadas. O catálogo salvo continua disponível.", result.failed.isNotEmpty())
                 refreshAccount()
             }
         }, failed = {
-            if (token == generation) { catalogJob = null; screen.refreshing(false); screen.message(it, true); screen.reload() }
+            if (token == generation && refreshEpoch == catalogEpoch && catalogView === screen) { catalogJob = null; screen.refreshing(false); screen.message(it, true); screen.reload() }
         })
     }
     private fun refreshAccount() {
         val client = api ?: return
-        if (catalogView == null || accountJob != null) return
+        if ((catalogView == null && selectionView == null) || accountJob != null) return
         val token = generation
         accountJob = jobs.run(network = true, work = { client.authenticate() }, done = {
-            if (token == generation) { accountJob = null; catalogView?.showAccount(it) }
+            if (token == generation) { accountJob = null; account = it; catalogView?.showAccount(it) }
         }, failed = { if (token == generation) accountJob = null })
     }
     fun openContent(item: Content) {
@@ -213,7 +229,7 @@ class MainActivity : Activity() {
         cancelPendingContent()
         ++generation; handler.removeCallbacks(accountPoll)
         playerView?.shutdown(); playerView = null; playbackSeries = null; playbackSeriesInfo = null; playbackMoviePlot = null; playbackCatalogFocus = null; closeDetails()
-        catalogJob?.cancel(true); catalogJob = null; accountJob?.cancel(true); accountJob = null
+        stopCatalogRefresh(); accountJob?.cancel(true); accountJob = null; account = null
         api?.cancel(); api = null; vault.clear(); images.switchScreen(); showLogin()
     }
     private fun toast(message: String) { Toast.makeText(this, message, Toast.LENGTH_LONG).show() }
@@ -229,6 +245,7 @@ class MainActivity : Activity() {
         catalogView?.let { screen ->
             if (screen.search.text.isNotBlank()) { screen.search.text.clear(); return }
             if (screen.tab != CatalogView.START_TAB) { screen.navigate(CatalogView.START_TAB); screen.nav[CatalogView.START_TAB]?.requestFocus(); return }
+            showSelection(); return
         }
         @Suppress("DEPRECATION")
         super.onBackPressed()

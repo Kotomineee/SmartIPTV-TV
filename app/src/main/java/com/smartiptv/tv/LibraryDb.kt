@@ -128,7 +128,7 @@ class LibraryDb(context: Context) : SQLiteOpenHelper(context, "library.db", null
         val args = mutableListOf(account)
         if (fromLibrary) conditions += if (kind == "favorites") "c.favorite=1" else "c.position>=1000 AND c.finished=0"
         else if (kind != "all") { conditions += "c.kind=?"; args += kind }
-        if (kind == "favorites" && favoriteKind.isNotEmpty()) {
+        if (fromLibrary && favoriteKind.isNotEmpty()) {
             conditions += when (favoriteKind) {
                 "movie" -> "c.uid LIKE 'movie:%'"
                 "series" -> "(c.uid LIKE 'series:%' OR c.uid LIKE 'episode:%')"

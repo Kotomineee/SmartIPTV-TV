@@ -10,8 +10,8 @@ import java.util.concurrent.TimeUnit
 class CatalogSync(private val api: XtreamApi, private val db: LibraryDb, private val cache: File) {
     data class Result(val updated: List<String>, val failed: List<String>)
     private data class Download(val kind: String, val categories: List<Category> = emptyList(), val file: File? = null)
-    fun refresh(force: Boolean, priority: String = "movie", sectionReady: (String) -> Unit = {}): Result {
-        val kinds = listOf(priority, "movie", "series", "live").distinct().filter { it in listOf("movie", "series", "live") && (force || !db.isFresh(api.credentials.account, it)) }
+    fun refresh(force: Boolean, priority: String = "movie", only: String? = null, sectionReady: (String) -> Unit = {}): Result {
+        val kinds = (only?.let { listOf(it) } ?: listOf(priority, "movie", "series", "live")).distinct().filter { it in listOf("movie", "series", "live") && (force || !db.isFresh(api.credentials.account, it)) }
         if (kinds.isEmpty()) return Result(emptyList(), emptyList())
         val directory = File(cache, "catalog-sync").apply { mkdirs() }
         // A previous interrupted process may have left only disposable network responses here.

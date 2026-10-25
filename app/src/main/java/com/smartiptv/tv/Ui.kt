@@ -91,7 +91,19 @@ class Glyph(private val symbol: String, private val color: Int = Palette.green, 
         val path = Path()
         when (symbol) {
             "check" -> { path.moveTo(4f, 12f); path.lineTo(9f, 17f); path.lineTo(20f, 6f) }
-            "tv", "live", "film", "movie", "series" -> { canvas.drawRoundRect(3f, 4f, 21f, 18f, 2f, 2f, paint); canvas.drawLine(8f, 22f, 16f, 22f, paint); canvas.drawLine(12f, 18f, 12f, 22f, paint) }
+            "tv", "live" -> { canvas.drawRoundRect(3f, 4f, 21f, 18f, 2f, 2f, paint); canvas.drawLine(8f, 22f, 16f, 22f, paint); canvas.drawLine(12f, 18f, 12f, 22f, paint) }
+            "series" -> {
+                canvas.drawRoundRect(3f, 8f, 17f, 21f, 2f, 2f, paint)
+                path.moveTo(6f, 5f); path.lineTo(20f, 5f); path.lineTo(20f, 18f)
+                path.moveTo(9f, 2f); path.lineTo(23f, 2f); path.lineTo(23f, 15f)
+                path.moveTo(8f, 11f); path.lineTo(13f, 14.5f); path.lineTo(8f, 18f); path.close()
+            }
+            "film", "movie" -> {
+                canvas.drawRoundRect(3f, 9f, 21f, 22f, 2f, 2f, paint)
+                canvas.drawLine(3f, 9f, 21f, 4f, paint); canvas.drawLine(3f, 5f, 21f, 0f, paint)
+                canvas.drawLine(3f, 5f, 3f, 9f, paint); canvas.drawLine(21f, 0f, 21f, 4f, paint)
+                canvas.drawLine(8f, 4f, 10f, 7f, paint); canvas.drawLine(14f, 2f, 16f, 5f, paint)
+            }
             "home" -> { path.moveTo(3f, 11f); path.lineTo(12f, 3f); path.lineTo(21f, 11f); path.moveTo(5f, 10f); path.lineTo(5f, 21f); path.lineTo(19f, 21f); path.lineTo(19f, 10f); path.moveTo(10f, 21f); path.lineTo(10f, 15f); path.lineTo(14f, 15f); path.lineTo(14f, 21f) }
             "heart" -> { path.moveTo(12f, 21f); path.cubicTo(-7f, 8f, 7f, -3f, 12f, 6f); path.cubicTo(17f, -3f, 31f, 8f, 12f, 21f) }
             "play" -> { path.moveTo(8f, 4f); path.lineTo(20f, 12f); path.lineTo(8f, 20f); path.close() }

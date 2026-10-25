@@ -13,4 +13,4 @@ collect() {
   adb pull /sdcard/Download/SmartIPTV-TV-testshots artifacts/screenshots || true
 }
 trap collect EXIT
-timeout -k 20s 6m bash ./gradlew connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.timeout_msec=180000 --console=plain
+timeout -k 20s 10m bash ./gradlew connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.timeout_msec=180000 --console=plain

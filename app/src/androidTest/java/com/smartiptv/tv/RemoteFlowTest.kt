@@ -78,14 +78,31 @@ class RemoteFlowTest {
         }
         waitFor("Login button ready") { it.hasWindowFocus() && it.loginView!!.submit.hasFocus() }
         device.pressDPadCenter()
-        waitFor("Catalog was not opened") { it.catalogView != null }
-        waitFor("Catalog did not finish") { it.catalogView!!.refreshButton.isEnabled && it.database.page(provider.account, "movie").total == 120 }
+        waitFor("Content gateway was not opened") { it.selectionView != null }
+        assertEquals("Login downloaded unselected catalogs", 0, provider.catalogRequests.get())
+        selectArea("movie")
+    }
+    private fun selectArea(kind: String) {
+        val same = AtomicReference(false); ui { same.set(it.catalogView?.mediaKind == kind) }
+        if (same.get()) return
+        val inCatalog = AtomicReference(false); ui { inCatalog.set(it.catalogView != null) }
+        if (inCatalog.get()) {
+            ui { it.catalogView!!.nav.getValue("back").requestFocus() }; device.pressDPadCenter()
+        }
+        waitFor("Content gateway missing") { it.selectionView != null && it.catalogView == null }
+        ui { assertEquals(0, it.images.memoryBytes); it.selectionView!!.choices.getValue(kind).requestFocus() }
+        device.pressDPadCenter()
+        waitFor("Selected area did not open on its favorites") { it.catalogView?.let { c -> c.mediaKind == kind && c.tab == "favorites" } == true }
+        waitFor("Selected catalog did not finish", 60000) { it.catalogView?.refreshButton?.isEnabled == true && it.database.page(provider.account, kind, limit = 1).total > 0 }
+        waitFor("Favorites query did not settle") { it.catalogView!!.count.text.toString().endsWith("conteúdos") }
     }
     private fun navigate(tab: String) {
+        if (tab in listOf("movie", "series", "live")) selectArea(tab)
         ui { it.catalogView!!.nav.getValue(tab).requestFocus() }
         device.pressDPadCenter()
         waitFor("Navigation failed: $tab") { it.catalogView!!.tab == tab }
-        if (tab != "home" && tab != "settings") waitFor("Grid not ready") { it.catalogView!!.grid.childCount > 0 }
+        if (tab != "settings") waitFor("Grid query not ready") { it.catalogView!!.count.text.toString().endsWith("conteúdos") }
+        if (tab in listOf("movie", "series", "live")) waitFor("Grid not ready") { it.catalogView!!.grid.childCount > 0 && it.catalogView!!.grid.isShown }
     }
     private fun focusDescription(name: String) {
         ui { activity ->
@@ -134,7 +151,7 @@ class RemoteFlowTest {
         device.pressDPadDown(); device.pressDPadDown()
         waitFor("Cannot reach login after native keyboard input") { it.loginView!!.submit.hasFocus() }
         device.pressDPadCenter()
-        waitFor("Native keyboard login failed") { it.catalogView?.refreshButton?.isEnabled == true && it.database.page(provider.account, "movie").total == 120 }
+        waitFor("Native keyboard login failed") { it.selectionView != null }
         navigate("movie")
         typeInto("Buscar no catálogo", "horizonte") { it.catalogView!!.search }
         waitFor("Movie search did not filter") { it.catalogView!!.count.text.toString() == "1 conteúdo" || it.catalogView!!.count.text.toString() == "1 conteúdos" }
@@ -158,9 +175,9 @@ class RemoteFlowTest {
         device.pressDPadDown()
         waitFor("D-pad did not move to username") { it.loginView!!.username.hasFocus() }
         login()
-        navigate("home")
+        navigate("movie")
         waitFor("Visible artwork did not load") { it.images.memoryBytes > 0 }
-        capture("02-novidades")
+        capture("02-filmes")
 
         // Enter the selected content area with Right and open it with OK.
         navigate("movie")
@@ -232,7 +249,7 @@ class RemoteFlowTest {
 
         // Account-scoped favorites, progress and encrypted remembered login survive restart.
         scenario.close(); scenario = ActivityScenario.launch(MainActivity::class.java)
-        waitFor("Saved session did not restore") { it.catalogView != null }
+        waitFor("Saved session did not restore") { it.selectionView != null }; selectArea("series")
         ui { assertEquals(1, it.database.page(provider.account, "favorites").total); assertEquals(1, it.database.page(provider.account, "continue").total) }
         navigate("settings"); ui { it.catalogView!!.nextButton.requestFocus() }; device.pressDPadCenter()
         ui { assertTrue(it.database.autoNext) }; capture("08-configuracoes")
@@ -280,6 +297,9 @@ class RemoteFlowTest {
                 assertEquals(activity.catalogView!!.order.height, order.height())
                 assertTrue(activity.catalogView!!.grid.childCount > 0)
                 assertTrue(activity.catalogView!!.grid.width > 0)
+                listOf(activity.catalogView!!.nav.getValue("favorites"), activity.catalogView!!.nav.getValue("continue"), activity.catalogView!!.nav.getValue("settings")).forEach { v ->
+                    val r = Rect(); assertTrue(v.getGlobalVisibleRect(r)); assertEquals(v.width, r.width()); assertEquals(v.height, r.height())
+                }
             }
             capture("09-layout-$size")
             ui { it.database.record(provider.account, Content("episode", "101", "Episódio 1", seriesId = "4", seriesName = "Novos caminhos 4", season = 1, episode = 1), 5000, 20000) }
@@ -310,7 +330,9 @@ class RemoteFlowTest {
             }
         }
         device.pressDPadCenter()
-        waitFor("Large catalog login did not open") { it.catalogView != null }
+        waitFor("Large catalog login did not open gateway") { it.selectionView != null }
+        ui { it.selectionView!!.choices.getValue("movie").requestFocus() }; device.pressDPadCenter()
+        waitFor("Large movie area did not open") { it.catalogView != null }
         navigate("settings")
         var worstPulse = 0L
         repeat(16) {
@@ -324,10 +346,11 @@ class RemoteFlowTest {
             ui { assertEquals("Unexpected toggle state", (it.catalogView!!.nextButton.text.toString().endsWith("Ligado")), it.database.autoNext) }
         }
         waitFor("Large catalog did not finish all sections", 60000) {
-            it.catalogView!!.refreshButton.isEnabled && it.database.page(provider.account, "movie", limit = 1).total == 20000 && it.database.page(provider.account, "series", limit = 1).total == 6000 && it.database.page(provider.account, "live", limit = 1).total == 1000
+            it.catalogView!!.refreshButton.isEnabled && it.database.page(provider.account, "movie", limit = 1).total == 20000
         }
         val cold = SystemClock.uptimeMillis() - started
-        repeat(8) { for (tab in listOf("movie", "series", "live", "settings")) {
+        ui { assertEquals(0, it.database.page(provider.account, "series").total); assertEquals(0, it.database.page(provider.account, "live").total) }
+        repeat(3) { for (tab in listOf("movie", "series", "live", "settings")) {
             navigate(tab)
             ui { assertTrue(it.images.memoryBytes <= 6 * 1024 * 1024); assertTrue(it.images.pendingCount <= 48) }
         } }
@@ -344,7 +367,7 @@ class RemoteFlowTest {
         scenario.close()
         val warmStart = SystemClock.uptimeMillis()
         scenario = ActivityScenario.launch(MainActivity::class.java)
-        waitFor("Cached catalog did not restore") { it.catalogView?.refreshButton?.isEnabled == true && it.database.page(provider.account, "movie", limit = 1).total == 20000 }
+        waitFor("Cached session did not restore gateway") { it.selectionView != null }; selectArea("movie")
         assertEquals("Fresh catalog was downloaded again on restart", requests, provider.catalogRequests.get())
         android.util.Log.i("SmartIPTVTest", "PERFORMANCE: 27000 items, cold=${cold}ms, warm=${SystemClock.uptimeMillis() - warmStart}ms, worst UI heartbeat=${worstPulse}ms, downloads=$requests")
     }
@@ -396,7 +419,7 @@ class RemoteFlowTest {
         openSeries(); expectWatched(true)
         device.pressBack(); waitFor("Episode modal did not close") { it.details == null }
         scenario.close(); scenario = ActivityScenario.launch(MainActivity::class.java)
-        waitFor("Session did not restore for watched history") { it.catalogView != null }
+        waitFor("Session did not restore for watched history") { it.selectionView != null }
         openSeries(); expectWatched(true)
 
         device.executeShellCommand("wm size 1280x720")
@@ -435,7 +458,7 @@ class RemoteFlowTest {
         }
         capture("18-movie-catalog-resume")
         scenario.close(); scenario = ActivityScenario.launch(MainActivity::class.java)
-        waitFor("Movie resume session did not restore") { it.catalogView != null }
+        waitFor("Movie resume session did not restore") { it.selectionView != null }; selectArea("movie")
         navigate("favorites"); waitFor("Movie favorite sections not loaded") { it.catalogView!!.count.text.toString() == "1 conteúdos" }
         ui { it.catalogView!!.focusContent() }; device.pressDPadCenter()
         waitFor("Favorite movie lost saved time after restart") { it.details?.movieResume?.text?.toString() == "Parou em 00:07" }
@@ -459,81 +482,94 @@ class RemoteFlowTest {
         device.executeShellCommand("wm size reset")
     }
 
-    @Test fun favoritesAreSeparatedAndRemainSearchableSortableAndRemoteNavigable() {
+    @Test fun favoritesAndContinueAreScopedSearchableAndPreservedAcrossAreas() {
         login()
+        navigate("series"); navigate("live"); navigate("movie")
         ui { activity ->
             val db = activity.database
             db.page(provider.account, "movie", limit = 3).items.forEach { db.toggleFavorite(provider.account, it) }
             db.page(provider.account, "series", limit = 2).items.forEach { db.toggleFavorite(provider.account, it) }
             db.toggleFavorite(provider.account, db.page(provider.account, "live", limit = 1).items.single())
+            db.record(provider.account, db.page(provider.account, "movie", limit = 1).items.single(), 7000, 90000)
+            db.record(provider.account, Content("episode", "101", "Episódio 1", seriesId = "4", seriesName = "Novos caminhos 4", season = 1, episode = 1), 18000, 90000)
         }
         navigate("favorites")
-        waitFor("Favorite sections did not load") { it.catalogView!!.count.text.toString() == "6 conteúdos" && it.catalogView!!.grid.adapter?.itemCount == 9 }
-        ui { activity ->
-            val grid = activity.catalogView!!.grid
-            assertTrue(grid.adapter is androidx.recyclerview.widget.ConcatAdapter)
-            val manager = grid.layoutManager as androidx.recyclerview.widget.GridLayoutManager
-            listOf(0, 4, 7).forEach { assertEquals(manager.spanCount, manager.spanSizeLookup.getSpanSize(it)) }
-            listOf(1, 2, 3, 5, 6, 8).forEach { assertEquals(1, manager.spanSizeLookup.getSpanSize(it)) }
-            activity.catalogView!!.focusContent()
-        }
-        waitFor("Favorites did not focus a movie card") { (it.currentFocus as? CatalogAdapter.Tile)?.title?.text?.toString()?.let { name -> name.startsWith("Filme") || name == "Além do horizonte" } == true }
-        capture("20-favorites-movies-and-series-1080p")
-        device.pressDPadDown()
-        waitFor("D-pad did not cross the favorite section heading") { (it.currentFocus as? CatalogAdapter.Tile)?.title?.text?.toString()?.startsWith("Novos caminhos") == true }
-        capture("21-favorites-series-focus")
-        device.pressDPadLeft()
-        waitFor("Left from series favorites did not reach sidebar") { it.catalogView!!.nav.getValue("favorites").hasFocus() }
+        waitFor("Movie favorites mixed with other kinds") { it.catalogView!!.grid.adapter?.itemCount == 3 }
+        ui { assertTrue((it.catalogView!!.grid.adapter as CatalogAdapter).cachedItems().all { c -> c.kind == "movie" }) }
+        capture("31-movie-favorites")
+        navigate("continue")
+        waitFor("Movie continue mixed with series") { it.catalogView!!.grid.adapter?.itemCount == 1 && (it.catalogView!!.grid.adapter as CatalogAdapter).cachedItems().single().kind == "movie" }
+        selectArea("series")
+        waitFor("Series favorites not isolated") { it.catalogView!!.grid.adapter?.itemCount == 2 }
         ui { it.catalogView!!.search.setText("caminhos") }
-        waitFor("Favorite search did not filter across sections") { it.catalogView!!.count.text.toString() == "2 conteúdos" && it.catalogView!!.grid.adapter?.itemCount == 3 }
+        waitFor("Series favorite search failed") { it.catalogView!!.count.text.toString() == "2 conteúdos" }
         ui { it.catalogView!!.order.requestFocus() }; device.pressDPadCenter()
-        waitFor("Favorite section ordering failed") { it.catalogView!!.order.text.toString() == "Nome A–Z" && it.catalogView!!.count.text.toString() == "2 conteúdos" && (it.catalogView!!.grid.findViewHolderForAdapterPosition(1) as? CatalogAdapter.Holder)?.card?.item?.name == "Novos caminhos 3" }
+        waitFor("Series favorite alphabetical order failed") { it.catalogView!!.order.text.toString() == "Nome A–Z" && (it.catalogView!!.grid.findViewHolderForAdapterPosition(0) as? CatalogAdapter.Holder)?.card?.item?.name == "Novos caminhos 3" }
+        ui { it.catalogView!!.search.text.clear(); it.catalogView!!.focusContent() }
+        waitFor("Favorites did not recover after search") { it.catalogView!!.grid.adapter?.itemCount == 2 }
+        capture("32-series-favorites")
+        navigate("continue")
+        waitFor("Series continue mixed with movies") { it.catalogView!!.grid.adapter?.itemCount == 1 && (it.catalogView!!.grid.adapter as CatalogAdapter).cachedItems().single().kind == "episode" }
         ui { it.catalogView!!.focusContent() }; device.pressDPadCenter()
-        waitFor("Filtered series favorite did not open") { it.details?.watch?.isEnabled == true }
-        ui { it.details!!.favorite.requestFocus() }; device.pressDPadCenter()
-        waitFor("Favorite removal failed") { it.database.page(provider.account, "favorites").total == 5 }
-        device.pressBack()
-        waitFor("Empty favorite section was not removed on reload") { it.details == null && it.catalogView!!.count.text.toString() == "1 conteúdos" && it.catalogView!!.grid.adapter?.itemCount == 2 }
-        ui { it.catalogView!!.search.setText("zzznada") }
-        waitFor("Empty favorites search left stale section headers") { it.catalogView!!.count.text.toString() == "0 conteúdos" && it.catalogView!!.grid.adapter?.itemCount == 0 }
-        ui { it.catalogView!!.search.text.clear() }
-        waitFor("Clearing favorite search lost saved contents") { it.catalogView!!.count.text.toString() == "5 conteúdos" && it.catalogView!!.grid.adapter?.itemCount == 8 }
-        device.executeShellCommand("wm size 1280x720")
-        waitFor("720p favorite grid not ready") { it.window.decorView.width == 1280 && it.catalogView!!.grid.childCount > 0 }
-        ui { it.catalogView!!.focusContent() }; device.pressDPadDown()
-        waitFor("720p favorites control navigation failed") { it.catalogView!!.grid.hasFocus() }
-        capture("22-favorites-sections-720p")
-        ui { assertTrue(it.images.memoryBytes <= 6 * 1024 * 1024); assertTrue(it.images.pendingCount <= 48) }
-        device.executeShellCommand("wm size reset")
+        waitFor("Scoped continue did not resume the episode") { it.playerView?.item?.uid == "episode:101" && it.playerView?.engine?.playbackState == Player.STATE_READY }
+        ui { it.leavePlayer() }; waitFor("Scoped episode return lost series") { it.details?.item?.id == "4" }
+        device.pressBack(); waitFor("Scoped detail did not close") { it.details == null }
+        selectArea("live")
+        waitFor("Live favorites mixed with VOD") { it.catalogView!!.grid.adapter?.itemCount == 1 }
+        ui { assertFalse(it.catalogView!!.nav.containsKey("continue")); assertTrue((it.catalogView!!.grid.adapter as CatalogAdapter).cachedItems().all { c -> c.kind == "live" }) }
+        capture("33-live-favorites")
+        selectArea("movie")
+        waitFor("Switching areas lost movie library") { it.catalogView!!.grid.adapter?.itemCount == 3 }
+        ui { assertEquals(6, it.database.page(provider.account, "favorites").total); assertEquals(2, it.database.page(provider.account, "continue").total) }
     }
 
-    @Test fun favoritesOpenFirstAndNovidadesPreservesTheFormerHomeContent() {
+    @Test fun gatewayDefersCatalogsAndEveryAreaStartsOnFavoritesIncludingRememberedLogin() {
         login()
         ui { activity ->
-            val screen = activity.catalogView!!
-            assertEquals("favorites", screen.tab)
-            assertEquals(listOf("favorites", "live", "movie", "series", "continue", "home", "settings"), screen.nav.keys.toList())
-            assertEquals("Favoritos", screen.nav.getValue("favorites").text.toString())
-            assertEquals("Novidades", screen.nav.getValue("home").text.toString())
-            assertTrue(screen.nav.getValue("favorites").hasFocus())
-            assertTrue(screen.nav.values.none { it.text.toString() == "Início" })
+            assertEquals(listOf("back", "favorites", "continue", "movie", "settings"), activity.catalogView!!.nav.keys.toList())
+            assertEquals(0, activity.database.page(provider.account, "series").total)
+            assertEquals(0, activity.database.page(provider.account, "live").total)
             activity.database.toggleFavorite(provider.account, activity.database.page(provider.account, "movie", limit = 1).items.single())
-            activity.database.toggleFavorite(provider.account, activity.database.page(provider.account, "series", limit = 1).items.single())
-            screen.reload()
         }
-        waitFor("Default Favorites did not display stored contents") { it.catalogView!!.count.text.toString() == "2 conteúdos" && it.catalogView!!.grid.adapter?.itemCount == 4 }
-        capture("24-favorites-default-start")
-        navigate("home")
-        waitFor("Novidades artwork did not load") { it.images.memoryBytes > 0 }
-        ui { it.catalogView!!.focusContent() }
-        waitFor("Novidades did not retain its content shelves") { (it.currentFocus as? CatalogAdapter.Tile)?.title?.text?.toString() == "Além do horizonte" }
-        capture("25-novidades-menu-order")
-        device.pressBack()
-        waitFor("Back did not return to Favorites") { it.catalogView?.tab == "favorites" && it.catalogView!!.nav.getValue("favorites").hasFocus() }
-        navigate("home")
+        ui { it.catalogView!!.nav.getValue("back").requestFocus() }; device.pressDPadCenter()
+        waitFor("Back did not show content gateway") { it.selectionView != null }
+        capture("28-content-selection")
+        device.executeShellCommand("wm size 1280x720")
+        waitFor("Gateway did not resize") { it.window.decorView.width == 1280 }
+        ui { activity ->
+            val bounds = Rect(0, 0, activity.window.decorView.width, activity.window.decorView.height)
+            activity.selectionView!!.choices.values.forEach { button ->
+                val visible = Rect(); assertTrue(button.getGlobalVisibleRect(visible)); assertTrue(bounds.contains(visible))
+                assertEquals(button.width, visible.width()); assertEquals(button.height, visible.height())
+            }
+        }
+        capture("34-content-selection-720p")
+        device.executeShellCommand("wm size reset")
+        waitFor("Gateway resolution did not restore") { it.window.decorView.width == 1920 }
+        val requests = provider.catalogRequests.get()
+        ui { assertEquals(listOf("live", "series", "movie"), it.selectionView!!.choices.keys.toList()); assertEquals(0, it.images.memoryBytes); it.selectionView!!.choices.getValue("live").requestFocus() }
+        device.pressDPadLeft(); ui { assertTrue(it.selectionView!!.choices.getValue("live").hasFocus()) }
+        device.pressDPadRight(); ui { assertTrue(it.selectionView!!.choices.getValue("series").hasFocus()) }
+        device.pressDPadRight(); ui { assertTrue(it.selectionView!!.choices.getValue("movie").hasFocus()) }
+        device.pressDPadRight(); device.pressDPadDown(); ui { assertTrue(it.selectionView!!.choices.getValue("movie").hasFocus()) }
+        assertEquals(requests, provider.catalogRequests.get())
+        selectArea("series")
+        ui { assertEquals("favorites", it.catalogView!!.tab); assertEquals(0, it.catalogView!!.grid.adapter!!.itemCount); assertEquals(0, it.database.page(provider.account, "live").total) }
+        capture("29-series-default-favorites")
+        focusDescription("Lançamentos"); device.pressDPadCenter()
+        waitFor("Provider series category did not open") { it.catalogView!!.tab == "series" && it.catalogView!!.count.text.toString() == "4 conteúdos" }
+        ui { assertTrue((it.catalogView!!.grid.adapter as CatalogAdapter).cachedItems().all { c -> c.kind == "series" && "1" in c.categories }) }
+        selectArea("live")
+        ui { assertEquals("favorites", it.catalogView!!.tab); assertFalse(it.catalogView!!.nav.containsKey("continue")); assertFalse(it.catalogView!!.nav.containsKey("movie")); assertFalse(it.catalogView!!.nav.containsKey("series")) }
+        val allRequests = provider.catalogRequests.get()
         scenario.close(); scenario = ActivityScenario.launch(MainActivity::class.java)
-        waitFor("Remembered session did not start on Favorites") { it.catalogView?.tab == "favorites" && it.catalogView!!.count.text.toString() == "2 conteúdos" }
-        ui { assertTrue(it.catalogView!!.nav.getValue("favorites").hasFocus()); assertEquals(2, it.database.page(provider.account, "favorites").total) }
+        waitFor("Remembered login skipped gateway") { it.selectionView != null && it.catalogView == null }
+        assertEquals(allRequests, provider.catalogRequests.get())
+        selectArea("movie")
+        waitFor("Remembered movie area did not start on saved favorites") { it.catalogView!!.tab == "favorites" && it.catalogView!!.grid.adapter?.itemCount == 1 }
+        ui { assertTrue(it.catalogView!!.nav.getValue("favorites").hasFocus()) }
+        assertEquals(allRequests, provider.catalogRequests.get())
+        capture("30-remembered-movie-favorites")
     }
 
     @Test fun directionalCatalogNavigationDoesNotWrapAcrossRowsOrFavoriteSections() {
@@ -541,7 +577,6 @@ class RemoteFlowTest {
         ui { activity ->
             val db = activity.database
             db.toggleFavorite(provider.account, db.page(provider.account, "movie", limit = 1).items.single())
-            db.page(provider.account, "series", limit = 4).items.forEach { db.toggleFavorite(provider.account, it) }
             activity.catalogView!!.reload()
         }
         fun expectPosition(position: Int) = waitFor("Directional focus did not reach card $position") { focusedGridPosition(it) == position }
@@ -550,8 +585,8 @@ class RemoteFlowTest {
             val width = size.substringBefore('x').toInt()
             waitFor("Directional display did not resize: $size") { it.window.decorView.width == width }
             if (size == "1280x720") navigate("favorites")
-            waitFor("Video fixture Favorites did not load") { it.catalogView!!.count.text.toString() == "5 conteúdos" && it.catalogView!!.grid.adapter?.itemCount == 7 }
-            selectGridPosition(1)
+            waitFor("Video fixture Favorites did not load") { it.catalogView!!.count.text.toString() == "1 conteúdos" && it.catalogView!!.grid.adapter?.itemCount == 1 }
+            selectGridPosition(0)
             device.pressDPadRight()
             waitFor("Right from the lone movie wrapped into series instead of ordering") { it.catalogView!!.order.hasFocus() }
             repeat(2) { device.pressDPadRight() }
@@ -559,14 +594,14 @@ class RemoteFlowTest {
             capture("26-directional-right-$size")
             device.pressDPadUp(); waitFor("Up from ordering did not reach search") { it.catalogView!!.search.hasFocus() }
             device.pressDPadDown(); waitFor("Down from search did not reach ordering") { it.catalogView!!.order.hasFocus() }
-            device.pressDPadLeft(); expectPosition(1)
+            device.pressDPadLeft(); expectPosition(0)
             device.pressDPadUp(); waitFor("Up from the first movie did not reach search") { it.catalogView!!.search.hasFocus() }
             device.pressDPadLeft(); waitFor("Left from search did not reach the current sidebar tab") { it.catalogView!!.nav.getValue("favorites").hasFocus() }
-            device.pressDPadRight(); expectPosition(1)
-            device.pressDPadDown(); expectPosition(3)
-            device.pressDPadUp(); expectPosition(1)
+            device.pressDPadRight(); expectPosition(0)
+            device.pressDPadDown(); expectPosition(0)
+            device.pressDPadUp(); expectPosition(0)
             device.pressDPadLeft(); waitFor("Left from the movie did not reach Favorites sidebar") { it.catalogView!!.nav.getValue("favorites").hasFocus() }
-            device.pressDPadDown(); waitFor("Sidebar Down did not follow menu order") { it.catalogView!!.nav.getValue("live").hasFocus() }
+            device.pressDPadDown(); waitFor("Sidebar Down did not follow menu order") { it.catalogView!!.nav.getValue("continue").hasFocus() }
             device.pressDPadUp(); waitFor("Sidebar Up did not return to Favorites") { it.catalogView!!.nav.getValue("favorites").hasFocus() }
 
             navigate("movie")
@@ -605,20 +640,6 @@ class RemoteFlowTest {
             capture("27-directional-paged-grid-$size")
         }
         device.executeShellCommand("wm size reset")
-        navigate("home")
-        waitFor("Directional Novidades shelf did not load") { it.images.memoryBytes > 0 }
-        focusDescription("Ver todos os filmes"); device.pressDPadUp()
-        waitFor("Novidades link Up did not reach search") { it.catalogView!!.search.hasFocus() }
-        device.pressDPadDown()
-        waitFor("Search Down did not reach the Novidades link below it") { it.currentFocus?.contentDescription?.toString() == "Ver todos os filmes" }
-        device.pressDPadDown()
-        waitFor("Novidades link Down did not reach its movie shelf") { it.currentFocus is CatalogAdapter.Tile }
-        val gallery = AtomicReference<androidx.recyclerview.widget.RecyclerView>()
-        ui { gallery.set(it.currentFocus!!.parent as androidx.recyclerview.widget.RecyclerView); gallery.get().scrollToPosition(17) }
-        waitFor("Last Novidades shelf card did not bind") { (gallery.get().findViewHolderForAdapterPosition(17) as? CatalogAdapter.Holder)?.card != null }
-        ui { gallery.get().findViewHolderForAdapterPosition(17)!!.itemView.requestFocus() }
-        device.pressDPadRight()
-        waitFor("Novidades shelf edge wrapped down into series") { it.currentFocus?.contentDescription?.toString() == "Ver todos os filmes" }
     }
 
     @Test fun episodeExitRestoresSameSeasonAndEpisodeWithPersistentResumeTime() {
@@ -658,7 +679,7 @@ class RemoteFlowTest {
         // Closing the picker then restarting must preserve per-row progress.
         device.pressBack(); waitFor("Picker did not return to series catalog") { it.details == null }
         scenario.close(); scenario = ActivityScenario.launch(MainActivity::class.java)
-        waitFor("Resume time session did not restore") { it.catalogView != null }
+        waitFor("Resume time session did not restore") { it.selectionView != null }; selectArea("series")
         navigate("continue"); ui { it.catalogView!!.focusContent() }; device.pressDPadCenter()
         waitFor("Continue watching did not resume episode 202") { it.playerView?.item?.uid == "episode:202" && it.playerView?.engine?.playbackState == Player.STATE_READY }
         ui { it.playerView!!.engine!!.pause(); it.playerView!!.engine!!.seekTo(7300) }

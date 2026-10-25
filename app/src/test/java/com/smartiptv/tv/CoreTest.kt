@@ -536,4 +536,39 @@ class CoreTest {
         assertEquals(setOf("episode:101"), db.watchedEpisodes(account, series.id))
         assertEquals(3, db.readableDatabase.version)
     }
+    @Test fun scopedLibraryKeepsMoviesEpisodesAndChannelsSeparateWithoutChangingSavedData() {
+        val episode = Content("episode", "e1", "Episódio 1", seriesId = series.id)
+        val channel = Content("live", "ch1", "Canal")
+        listOf(movie, series, episode, channel).forEach { db.toggleFavorite(account, it) }
+        db.record(account, movie, 14000, 90000)
+        db.record(account, episode, 29000, 90000)
+        db.record("other-account", movie, 5000, 90000)
+        assertEquals(setOf(movie.uid), db.page(account, "favorites", favoriteKind = "movie").items.map { it.uid }.toSet())
+        assertEquals(setOf(series.uid, episode.uid), db.page(account, "favorites", favoriteKind = "series").items.map { it.uid }.toSet())
+        assertEquals(setOf(channel.uid), db.page(account, "favorites", favoriteKind = "live").items.map { it.uid }.toSet())
+        assertEquals(listOf(movie.uid), db.page(account, "continue", favoriteKind = "movie").items.map { it.uid })
+        assertEquals(listOf(episode.uid), db.page(account, "continue", favoriteKind = "series").items.map { it.uid })
+        assertEquals(0, db.page(account, "continue", favoriteKind = "live").total)
+        assertEquals(0, db.page(account, "continue", favoriteKind = "unknown").total)
+        assertEquals(0, db.page(account, "favorites", favoriteKind = "movie", search = "Episódio").total)
+        assertEquals(4, db.page(account, "favorites").total)
+        assertEquals(14000L, db.checkpoint(account, movie)!!.position)
+        assertEquals(5000L, db.checkpoint("other-account", movie)!!.position)
+    }
+    @Test fun selectedCatalogSyncNeverRequestsOrReplacesUnselectedKinds() {
+        val client = api()
+        val key = client.credentials.account
+        db.replaceSection(key, "movie", listOf(Category("1", "Filmes"))) { it(movie) }
+        response("[]"); response("[]")
+        val sync = CatalogSync(client, db, java.io.File(context.cacheDir, "selected-sync"))
+        assertEquals(listOf("series"), sync.refresh(true, only = "series").updated)
+        assertEquals(2, server.requestCount)
+        val actions = (1..2).map { server.takeRequest().requestUrl!!.queryParameter("action") }.toSet()
+        assertEquals(setOf("get_series_categories", "get_series"), actions)
+        assertEquals(1, db.page(key, "movie").total)
+        assertTrue(db.isFresh(key, "series")); assertFalse(db.isFresh(key, "live"))
+        assertTrue(sync.refresh(false, only = "series").updated.isEmpty())
+        assertEquals(2, server.requestCount)
+    }
+
 }
