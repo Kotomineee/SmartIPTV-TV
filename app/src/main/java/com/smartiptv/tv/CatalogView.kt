@@ -120,7 +120,7 @@ class CatalogView(
             val manager = grid.layoutManager as GridLayoutManager
             val columns = ((right - left) / context.dp(128)).coerceIn(2, 8)
             if (manager.spanCount != columns) manager.spanCount = columns
-            adapter.reloadPosters()
+            adapter.fitVisibleCards(); adapter.reloadPosters()
         }
         grid.viewTreeObserver.addOnGlobalLayoutListener {
             completeGridFocus()

@@ -59,9 +59,21 @@ class CatalogAdapter(
     override fun onAttachedToRecyclerView(recyclerView: RecyclerView) { recycler = recyclerView }
     override fun onDetachedFromRecyclerView(recyclerView: RecyclerView) { recycler = null }
 
+    private fun tileHeight(context: Context): Int {
+        val preferred = context.dp(if (live) 151 else 217)
+        val available = recycler?.let { it.height - it.paddingTop - it.paddingBottom } ?: 0
+        return if (!horizontal && available > 0) minOf(preferred, available) else preferred
+    }
+    fun fitVisibleCards() {
+        recycler?.let { view -> for (index in 0 until view.childCount) {
+            val tile = view.getChildAt(index)
+            val height = tileHeight(tile.context)
+            if (tile.layoutParams.height != height) tile.layoutParams = tile.layoutParams.apply { this.height = height }
+        } }
+    }
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): Holder {
         val tile = Tile(parent.context)
-        tile.layoutParams = RecyclerView.LayoutParams(if (horizontal) parent.context.dp(132) else ViewGroup.LayoutParams.MATCH_PARENT, parent.context.dp(if (live) 151 else 217))
+        tile.layoutParams = RecyclerView.LayoutParams(if (horizontal) parent.context.dp(132) else ViewGroup.LayoutParams.MATCH_PARENT, tileHeight(parent.context))
         return Holder(tile)
     }
     override fun onBindViewHolder(holder: Holder, position: Int) = bind(holder, position)
@@ -97,7 +109,7 @@ class CatalogAdapter(
         }
         fun bind(value: CardData?) {
             card = value
-            val height = tile.context.dp(if (live) 151 else 217)
+            val height = tileHeight(tile.context)
             if (tile.layoutParams.height != height) tile.layoutParams = tile.layoutParams.apply { this.height = height }
             images.clear(tile.poster)
             tile.title.text = value?.item?.name ?: "Carregando…"

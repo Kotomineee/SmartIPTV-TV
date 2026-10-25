@@ -599,7 +599,7 @@ class RemoteFlowTest {
             device.pressDPadLeft(); waitFor("Left from search did not reach the current sidebar tab") { it.catalogView!!.nav.getValue("favorites").hasFocus() }
             device.pressDPadRight(); expectPosition(0)
             device.pressDPadDown(); expectPosition(0)
-            device.pressDPadUp(); expectPosition(0)
+            device.pressDPadUp(); waitFor("Up after the bottom edge did not reach search") { it.catalogView!!.search.hasFocus() }
             device.pressDPadLeft(); waitFor("Left from the movie did not reach Favorites sidebar") { it.catalogView!!.nav.getValue("favorites").hasFocus() }
             device.pressDPadDown(); waitFor("Sidebar Down did not follow menu order") { it.catalogView!!.nav.getValue("continue").hasFocus() }
             device.pressDPadUp(); waitFor("Sidebar Up did not return to Favorites") { it.catalogView!!.nav.getValue("favorites").hasFocus() }
